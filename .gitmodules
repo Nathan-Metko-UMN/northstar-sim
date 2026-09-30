@@ -1,0 +1,8 @@
+[submodule "external/Northstar-CV"]
+	path = external/Northstar-CV
+	url = git@github.com:Northstar-Advanced-Robotics/Northstar-CV.git
+	branch = sim-harness
+[submodule "external/TR-Simulation-ARCTIC-2026"]
+	path = external/TR-Simulation-ARCTIC-2026
+	url = https://github.com/Triton-Robotics/TR-Simulation-ARCTIC-2026.git
+	branch = main

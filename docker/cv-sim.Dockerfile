@@ -1,5 +1,5 @@
 # Northstar-CV dev image plus socat, which turns the harness's TCP UART into a local PTY.
-# Build (from this directory):  docker build -t northstar-cv:sim -f cv-sim.Dockerfile .
+# Built by `nssim build-cv` (or, from this directory: docker build -t northstar-cv:sim -f cv-sim.Dockerfile .)
 ARG BASE=northstar-cv:dev
 FROM ${BASE}
 USER root

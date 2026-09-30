@@ -1,7 +1,7 @@
 # northstar-sim
 
-Hardware-in-the-loop test harness for [Northstar-CV](../Northstar-CV) auto-aim, built on the
-[TR ARCTIC 2026 simulator](https://github.com/Triton-Robotics/TR-Simulation-ARCTIC-2026)'s
+Hardware-in-the-loop test harness for [Northstar-CV](https://github.com/Northstar-Advanced-Robotics/Northstar-CV)
+auto-aim, built on the [TR ARCTIC 2026 simulator](https://github.com/Triton-Robotics/TR-Simulation-ARCTIC-2026)'s
 field and armor models.
 
 The harness plays everything around Northstar-CV — the camera, the MCB and the enemy robot —
@@ -15,6 +15,67 @@ SIM HOST (Windows/Linux, runs this repo)            NORTHSTAR-CV (Docker here, o
   virtual MCB (115200 baud) <------ UART/TCP -------> socat PTY          (--uart /tmp/ttySIM)
   telemetry + ground truth logs <--- UDP ------------ detections/PF/aim  (--telemetry host:5800)
 ```
+
+## Setup
+
+You need an NVIDIA GPU (the sim renders with Vulkan and Northstar-CV's particle filter runs on
+CUDA), Docker (Docker Desktop on Windows), git and Python 3.10–3.12.
+
+Windows (PowerShell):
+
+```powershell
+git clone --recursive <this repo's URL>      # already cloned? git submodule update --init --recursive
+cd northstar-sim
+py -3.11 -m venv .venv
+.venv\Scripts\python -m pip install -e ".[sim,dev]"
+.venv\Scripts\nssim build-cv
+```
+
+Linux: the same with `python3.11 -m venv .venv` and `.venv/bin/` in place of `.venv\Scripts\`.
+
+`nssim build-cv` builds two Docker images the first time: `northstar-cv:dev` from Northstar-CV's
+own `.devcontainer/Dockerfile` (the CUDA dev image, about 15 GB), and `northstar-cv:sim` on top
+of it, which adds socat. It then compiles Northstar-CV inside them into
+`external/Northstar-CV/build/sim-x86`, detecting your GPU's CUDA architecture. Run it again
+whenever Northstar-CV changes.
+
+## Running
+
+```powershell
+.venv\Scripts\nssim run spinning                  # 6 rad/s spinner at 3 m, turret follows the CV's aim
+.venv\Scripts\nssim run static_plate              # a still plate, turret holds
+.venv\Scripts\nssim run strafing
+.venv\Scripts\nssim preview spinning --time 1.5   # one frame as the CV sees it, ground truth overlaid
+.venv\Scripts\nssim frame runs\<run> <seq>        # re-render a logged frame with the CV's detections
+.venv\Scripts\nssim eval runs\<run>               # re-run the evaluation of a saved run
+```
+
+`nssim run` starts Northstar-CV in Docker, runs the scenario, stops the container and prints
+the evaluation. Options: `--duration`, `--fps`, `--turret hold|ideal|second_order`,
+`--out <dir>`. Each run directory has `frames.jsonl` (ground truth per frame),
+`telemetry.jsonl` (what Northstar-CV reported), `events.jsonl`, `cv.log`, `config.json` and
+`summary.json`.
+
+## Where Northstar-CV and the TR assets come from
+
+`external/Northstar-CV` and `external/TR-Simulation-ARCTIC-2026` are git submodules pinned to
+the commits this harness was last checked against. The Northstar-CV one follows the
+`sim-harness` branch, where the simulator mode lives until it is merged.
+
+To test another Northstar-CV checkout, for example your working copy with uncommitted changes,
+pass it to both commands:
+
+```powershell
+.venv\Scripts\nssim build-cv --cv-dir D:\Robomaster\Northstar-CV
+.venv\Scripts\nssim run spinning --cv-dir D:\Robomaster\Northstar-CV
+```
+
+or set `NORTHSTAR_CV_DIR` once (`TR_SIM_DIR` does the same for the TR assets). You can also
+work in the submodule itself: `git -C external/Northstar-CV switch sim-harness`, commit and
+push there as usual, then record the new pin here with `git add external/Northstar-CV`.
+
+A clone elsewhere can only fetch a pinned commit that has been pushed, so push Northstar-CV's
+`sim-harness` before pushing a new pin.
 
 ## Paced mode
 
@@ -31,49 +92,20 @@ pipeline at the full 166 fps camera rate. Time is the MCB clock:
 Northstar-CV runs on the MCB clock in this mode (`src/sim/sim_clock.hpp`), so latency
 compensation and the filter's dt are what they would be on the robot.
 
-## Setup (Windows or Linux)
-
-```bash
-py -3.11 -m venv .venv            # Python 3.10-3.12 (mani_skill pins numpy<2)
-.venv/Scripts/python -m pip install -e ".[sim,viz,dev]"
-```
-
-The sim needs a Vulkan GPU; it renders natively (not in Docker). It expects the TR simulator
-checked out next to this repo (or set `TR_SIM_DIR`), and Northstar-CV next to it (or set
-`NORTHSTAR_CV_DIR`). Northstar-CV must be on a branch with the simulator mode
-(`sim-harness`).
-
-Build Northstar-CV and the container image it runs in (local Docker stand-in for the Jetson):
-
-```bash
-docker run --rm -v <Northstar-CV>:/ws -w /ws northstar-cv:dev \
-  bash -lc "cmake -S . -B build/sim-x86 -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_CUDA_ARCHITECTURES=89 && cmake --build build/sim-x86"
-docker build -t northstar-cv:sim -f docker/cv-sim.Dockerfile docker
-```
-
-## Running
-
-```bash
-nssim run static_plate            # frame check: a still plate, turret holds
-nssim run spinning                # 6 rad/s spinner at 3 m, turret follows the CV's aim
-nssim run strafing
-nssim preview spinning --time 1.5 # render one frame with ground-truth corners overlaid
-nssim eval runs/<run>             # re-run the evaluation of a saved run
-```
-
-`nssim run` starts Northstar-CV in Docker, runs the scenario, stops the container and prints
-the evaluation. Each run directory has `frames.jsonl` (ground truth per frame),
-`telemetry.jsonl` (what Northstar-CV reported), `events.jsonl`, `cv.log`, `config.json` and
-`summary.json`.
-
 ## What is simulated, and how
 
 - **Scene.** TR's field and armor panel models, rendered with SAPIEN. Robots are kinematic:
   poses come straight from scripted motion and the turret model, so ground truth is exact.
   Panels are scaled to the plate size Northstar-CV's PnP assumes (`src/pnp_solver.hpp`).
-- **Our robot.** Turret geometry is read from Northstar-CV's `src/constants.hpp`, and the
-  camera is the Triton2 TRT016S-CC (1440x1080) with the 6 mm lens's nominal intrinsics
-  (fx = fy = 1739 px) until the real lens is calibrated.
+- **Armor plates.** Light bars at TR's CAD size, in the colors a color camera records for the
+  LEDs (cyan-white for blue, orange-red for red). TR's sticker digits are enlarged 1.25x, the
+  middle of the range Northstar-CV's number classifier accepts; real stickers should be
+  checked against this.
+- **Camera.** The Triton2 TRT016S-CC (1440x1080, BayerRG8) with the 6 mm lens's nominal
+  intrinsics (fx = fy = 1739 px) until the real lens is calibrated. Lens blur and glare around
+  the light bars are applied before the Bayer mosaic (`nssim/camera/optics.py`), and
+  Northstar-CV debayers the frame itself, as on the robot.
+- **Our robot.** Turret geometry is read from Northstar-CV's `src/constants.hpp`.
 - **Enemies.** Four plates 90 degrees apart, high pair at +z_offset (the particle filter's
   model), 15 degree tilt, scripted translation/strafe/spin.
 - **MCB.** The UART protocol, send periods, robot-ID timer, ALIVE timeout and fire-gate
@@ -83,10 +115,14 @@ the evaluation. Each run directory has `frames.jsonl` (ground truth per frame),
 ## Layout
 
 ```
-nssim/protocol   DJI serial framing, CRCs, message layouts
-nssim/mcb        virtual MCB, UART link, turret model
-nssim/camera     Triton2 camera model, Bayer mosaic, frame stream
-nssim/sim        SAPIEN scene, TR assets, targets, our turret kinematics
-nssim/runner.py  paced run loop
-nssim/eval.py    metrics
+external/          Northstar-CV and TR simulator submodules
+docker/            the sim image (Northstar-CV dev image + socat)
+nssim/protocol     DJI serial framing, CRCs, message layouts
+nssim/mcb          virtual MCB, UART link, turret model
+nssim/camera       Triton2 camera model, lens effects, Bayer mosaic, frame stream
+nssim/sim          SAPIEN scene, TR assets, targets, our turret kinematics
+nssim/runner.py    paced run loop
+nssim/eval.py      metrics
+nssim/cv_build.py  Docker images + Northstar-CV build
+nssim/debug.py     re-render logged frames
 ```

@@ -1,19 +1,22 @@
-"""Command line: ``nssim run <scenario>``, ``nssim eval <run_dir>``, ``nssim preview <scenario>``."""
+"""Command line: build-cv, run, eval, preview and frame (see ``nssim <command> -h``)."""
 
 from __future__ import annotations
 
 import argparse
 import datetime as dt
 import json
-import os
 import sys
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
+from nssim import paths
+from nssim.paths import REPO_ROOT
 
 
 def _cv_dir(arg: str | None) -> Path:
-    return Path(arg or os.environ.get("NORTHSTAR_CV_DIR", REPO_ROOT.parent / "Northstar-CV"))
+    path = paths.cv_dir(arg)
+    if not (path / "src").is_dir():
+        sys.exit(paths.missing_hint(path, "Northstar-CV", "NORTHSTAR_CV_DIR"))
+    return path
 
 
 def _config(args):
@@ -42,12 +45,25 @@ def _runner(cfg, cv_dir: Path, out_dir: Path):
     return Runner(cfg, load_robot_constants(cv_dir), out_dir, assets)
 
 
+def cmd_build_cv(args) -> None:
+    from nssim.cv_build import build
+
+    binary = build(_cv_dir(args.cv_dir), cuda_arch=args.cuda_arch, rebuild_images=args.rebuild_images)
+    print(f"[nssim] built {binary}")
+
+
 def cmd_run(args) -> None:
+    from nssim.cv_build import binary_path, image_exists
     from nssim.cv_launcher import CvContainer
     from nssim.eval import evaluate
 
     cfg = _config(args)
     cv_dir = _cv_dir(args.cv_dir)
+    if not args.no_launch:
+        if not binary_path(cv_dir, args.build_dir).is_file():
+            sys.exit(f"no simulator build of Northstar-CV in {cv_dir / args.build_dir}; run `nssim build-cv` first")
+        if not image_exists(args.image):
+            sys.exit(f"Docker image {args.image} not found; run `nssim build-cv` first")
     stamp = dt.datetime.now().strftime("%Y%m%d_%H%M%S")
     out_dir = Path(args.out) if args.out else REPO_ROOT / "runs" / f"{stamp}_{cfg.name}"
     runner = _runner(cfg, cv_dir, out_dir)
@@ -108,13 +124,19 @@ def main(argv=None) -> None:
     parser = argparse.ArgumentParser(prog="nssim", description=__doc__)
     sub = parser.add_subparsers(dest="cmd", required=True)
 
+    bc = sub.add_parser("build-cv", help="build the Docker images and Northstar-CV's simulator binary")
+    bc.add_argument("--cv-dir", help="Northstar-CV checkout (default: the external/Northstar-CV submodule)")
+    bc.add_argument("--cuda-arch", help="CUDA compute capability to build for, e.g. 89 (default: this machine's GPU)")
+    bc.add_argument("--rebuild-images", action="store_true", help="rebuild the Docker images even if they exist")
+    bc.set_defaults(func=cmd_build_cv)
+
     run = sub.add_parser("run", help="run a scenario with Northstar-CV in the loop")
     run.add_argument("scenario")
     run.add_argument("--duration", type=float)
     run.add_argument("--fps", type=float)
     run.add_argument("--turret", choices=["hold", "ideal", "second_order"])
     run.add_argument("--no-compress", action="store_true", help="send raw Bayer frames (fast links)")
-    run.add_argument("--cv-dir")
+    run.add_argument("--cv-dir", help="Northstar-CV checkout to test (default: the external/Northstar-CV submodule)")
     run.add_argument("--out")
     run.add_argument("--no-launch", action="store_true", help="don't start the container (Northstar-CV started elsewhere)")
     run.add_argument("--image", default="northstar-cv:sim")

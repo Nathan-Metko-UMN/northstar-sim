@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
-import os
 from dataclasses import dataclass
 from functools import cached_property
 from pathlib import Path
 
 import numpy as np
+
+from nssim import paths
 
 FIELD_FLOOR = "2026_ARC_3v3_floor.gltf"
 FIELD_ELEMENTS = [
@@ -76,23 +77,15 @@ class PlateGeometry:
     bars: LightBarGeometry
 
 
-def default_tr_dir() -> Path:
-    here = Path(__file__).resolve().parents[2]
-    return Path(os.environ.get("TR_SIM_DIR", here.parent / "TR-Simulation-ARCTIC-2026"))
-
-
 class TrAssets:
     def __init__(self, tr_dir: Path | None = None, plate_dims: dict[str, tuple[float, float]] | None = None):
         """``plate_dims``: {"small"|"large": (bar spacing, bar length)} to scale panels to; None keeps TR's."""
         self.plate_dims = plate_dims
         self._part_cache: dict[str, list[MeshPart]] = {}
-        root = Path(tr_dir) if tr_dir else default_tr_dir()
+        root = paths.tr_dir(tr_dir)
         self.models_dir = root / "src" / "tr-simulation-maniskill" / "resource" / "models"
         if not (self.models_dir / "field" / FIELD_FLOOR).is_file():
-            raise FileNotFoundError(
-                f"TR simulator assets not found under {self.models_dir}; set TR_SIM_DIR to your "
-                "TR-Simulation-ARCTIC-2026 checkout"
-            )
+            raise FileNotFoundError(paths.missing_hint(root, "TR simulator assets", "TR_SIM_DIR"))
 
     def field_file(self, name: str) -> Path:
         return self.models_dir / "field" / name
