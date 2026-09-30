@@ -18,20 +18,24 @@ SIM HOST (Windows/Linux, runs this repo)            NORTHSTAR-CV (Docker here, o
 
 ## Setup
 
-You need an NVIDIA GPU (the sim renders with Vulkan and Northstar-CV's particle filter runs on
-CUDA), Docker (Docker Desktop on Windows), git and Python 3.10–3.12.
+Northstar-CV runs either in Docker on the same machine (needs an NVIDIA GPU) or on the Jetson (see
+[Running Northstar-CV on the Jetson](#running-northstar-cv-on-the-jetson); then this machine only
+needs a GPU that does Vulkan, and integrated graphics should be enough).
 
-Windows (PowerShell):
+Everything below: git and Python 3.10–3.12. Windows (PowerShell):
 
 ```powershell
 git clone --recursive <this repo's URL>      # already cloned? git submodule update --init --recursive
 cd northstar-sim
 py -3.11 -m venv .venv
-.venv\Scripts\python -m pip install -e ".[sim,dev]"
-.venv\Scripts\nssim build-cv
+.venv\Scripts\python -m pip install -e ".[sim,dev]"     # ~330 MB
+.venv\Scripts\nssim preview spinning --time 1           # checks the renderer: writes .scratch\preview_spin_6.png
+.venv\Scripts\nssim build-cv                            # only to run Northstar-CV here, in Docker
 ```
 
 Linux: the same with `python3.11 -m venv .venv` and `.venv/bin/` in place of `.venv\Scripts\`.
+`--recursive` also fetches Northstar-CV's particle-filter library, which only a machine that builds
+Northstar-CV needs; `git submodule update --init` without it is enough otherwise.
 
 `nssim build-cv` builds two Docker images the first time: `northstar-cv:dev` from Northstar-CV's
 own `.devcontainer/Dockerfile` (the CUDA dev image, about 15 GB), and `northstar-cv:sim` on top
@@ -95,6 +99,48 @@ The run is paced to the wall clock. With Northstar-CV in Docker Desktop each fra
 20 ms of wall time, so `drive` defaults to a 50 fps camera, which runs close to real time;
 `--fps 166` gives the real camera rate in slow motion (the panel shows the factor). Close the
 viewer to stop; the run is saved and evaluated like any other.
+
+## Running Northstar-CV on the Jetson
+
+The sim stays on your machine and Northstar-CV runs natively on the Jetson, so the processing time
+(and so the aim latency) is the Jetson's own. Any of `nssim run`, `run --view` and `drive` take:
+
+```powershell
+.venv\Scripts\nssim drive --jetson nvidia@192.168.1.50
+```
+
+It logs in over SSH, starts Northstar-CV there pointed back at this machine, and stops it at the
+end. `--jetson-dir` (default `~/Northstar-CV`) and `--jetson-build` (default `build`) say where
+the checkout and its build directory are; `--harness-ip` overrides the address the Jetson is told
+to connect back to (detected from the route to it).
+
+Once, on the Jetson:
+
+1. Check out Northstar-CV's `sim-harness` branch, the commit `external/Northstar-CV` is pinned to
+   (this repo reads the robot constants and plate sizes from the submodule, so keep them the same),
+   and build it the way you do for the robot.
+2. `sudo apt install socat` (it turns the harness's TCP link into the PTY Northstar-CV opens as its
+   UART).
+
+Once, on this machine:
+
+1. SSH without a password prompt: `ssh-keygen -t ed25519` (skip if you have a key), then
+   `type $env:USERPROFILE\.ssh\id_ed25519.pub | ssh nvidia@<jetson> "cat >> ~/.ssh/authorized_keys"`
+   (Linux: `ssh-copy-id nvidia@<jetson>`).
+2. Let the Jetson in: it connects to TCP 5600 and 5760 and sends UDP to 5800 on this machine. On
+   Windows, allow Python when the firewall asks, and check the connection's network profile: a
+   direct Ethernet link often comes up as Public, where that allowance doesn't apply. Either set it
+   to Private or add rules (PowerShell as administrator):
+
+   ```powershell
+   New-NetFirewallRule -DisplayName nssim-tcp -Direction Inbound -Protocol TCP -LocalPort 5600,5760 -Action Allow
+   New-NetFirewallRule -DisplayName nssim-udp -Direction Inbound -Protocol UDP -LocalPort 5800 -Action Allow
+   ```
+
+Frames are compressed by default (about 50 KB each), which suits Wi-Fi. On a wired gigabit or
+faster link `--no-compress` sends raw frames (1.5 MB) and spares the Jetson the decompression.
+Neither counts toward the processing time Northstar-CV reports. To start Northstar-CV by hand
+instead, run with `--no-launch` and use the command `nssim` would have printed.
 
 ## Where Northstar-CV and the TR assets come from
 

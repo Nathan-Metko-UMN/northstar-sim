@@ -11,15 +11,13 @@ dependencies = [
     "numpy<2",
     "opencv-python",
     "pyyaml",
+    "dacite",
 ]
 
 [project.optional-dependencies]
-# The simulator itself (SAPIEN renders through Vulkan; PyTorch can be the CPU build).
+# The renderer (SAPIEN, through Vulkan). ManiSkill isn't needed: the harness builds its own scene.
 sim = [
     "sapien==3.0.3",
-    "mani_skill==3.0.0b22",
-    "coacd",
-    "torch",
 ]
 viz = [
     "foxglove-sdk",
@@ -39,5 +37,5 @@ include = ["nssim*"]
 testpaths = ["tests"]
 markers = [
     "docker: needs Docker and the northstar-cv:dev image (Linux-only C++ conformance tests)",
-    "sim: needs the simulator stack (sapien, mani_skill) and a Vulkan device",
+    "sim: needs SAPIEN and a Vulkan device",
 ]

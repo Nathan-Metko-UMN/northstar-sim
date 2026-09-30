@@ -67,5 +67,6 @@ def render_logged_frame(run_dir: Path, seq: int, cv_dir: Path, out: Path) -> Pat
                 label = f"{armor['number']} {armor['confidence']:.2f}"
                 cv2.putText(bgr, label, tuple(pts[1] + [0, -6]), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1)
         cv2.putText(bgr, f"seq {seq} lights {det.get('n_lights', '?')}", (10, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 1)
+    Path(out).parent.mkdir(parents=True, exist_ok=True)
     cv2.imwrite(str(out), bgr)
     return out

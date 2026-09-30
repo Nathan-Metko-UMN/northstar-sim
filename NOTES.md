@@ -69,6 +69,15 @@ Northstar-CV itself was tuned on:
 Results with these settings: recall 100% below 40° incidence, 87–96% at 40–60°, 62% at 60–70°;
 no misread numbers; corner error ~1 px.
 
+## Plate height offset
+
+Northstar-CV doesn't estimate how far the high plate pair sits above the low one; the particle
+filter takes it as a fixed parameter, looked up by the classified number in
+`config/plate_heights.yaml` (active team CU: 0.03 m for "3" and "guard", 0.032 m for "1"; 0.04 m
+for numbers not in the file). The sim builds every enemy with 0.03 m, so by default the enemy is
+exactly what the filter assumes. `--plate-height` builds them differently, e.g. 0.046 (ARUW's and
+UBC's infantry in that file) to see how the filter copes with a wrong assumption.
+
 ## Open questions
 
 - Real footage at a known distance and exposure would pin down the glare and bar brightness.
