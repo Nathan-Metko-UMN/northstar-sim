@@ -3,13 +3,17 @@
 Every message is ``magic[4] | body_length u32 | body`` (little-endian):
 
 - ``NSHL`` hello, server -> client on connect: UTF-8 JSON describing the camera and run mode.
-- ``NSFR`` frame, server -> client: ``FRAME_HEADER`` then ``width*height`` Bayer bytes, then
-  (if ``FLAG_ORACLE``) ``json_length u32 | JSON`` with ground-truth plate corners.
+- ``NSFR`` frame, server -> client: ``FRAME_HEADER`` then ``image_bytes`` of Bayer data
+  (``width*height`` bytes, or zlib-compressed if ``FLAG_ZLIB``), then (if ``FLAG_ORACLE``)
+  ``json_length u32 | JSON`` with ground-truth plate corners.
 - ``NSAK`` ack, client -> server (paced mode): ``seq u64 | processing_us u32``, sent when the
   client asks for the next frame, i.e. after Northstar-CV has finished with ``seq``.
 
 ``capture_mcb_us`` is the end of exposure on the MCB clock; ``arrival_delay_us`` is how long
-after that the frame would reach the Jetson (readout + GigE transfer).
+after that the frame would reach the Jetson (readout + GigE transfer). In paced mode
+``odom_watermark_mcb_us`` is the timestamp of the last odometry message sent before this frame;
+SimCamera holds the frame until Northstar-CV's odometry buffer has caught up to it, because the
+UART and the frame stream are separate connections.
 """
 
 from __future__ import annotations
@@ -17,6 +21,7 @@ from __future__ import annotations
 import json
 import socket
 import struct
+import zlib
 from dataclasses import dataclass
 
 MAGIC_HELLO = b"NSHL"
@@ -26,9 +31,12 @@ PROTOCOL_VERSION = 1
 
 PIXEL_BAYER_RG8 = 1
 FLAG_ORACLE = 1
+FLAG_ZLIB = 2  # image bytes are zlib-compressed (lossless); used where the link is slow
 
 _PREFIX = struct.Struct("<4sI")
-FRAME_HEADER = struct.Struct("<QqIIHHBBH")
+# seq, capture_mcb_us, odom_watermark_mcb_us, exposure_us, arrival_delay_us, width, height,
+# pixel_format, flags, reserved, image_bytes
+FRAME_HEADER = struct.Struct("<QqqIIHHBBHI")
 _ACK = struct.Struct("<QI")
 _U32 = struct.Struct("<I")
 
@@ -43,11 +51,14 @@ class FrameHeader:
     height: int
     pixel_format: int = PIXEL_BAYER_RG8
     flags: int = 0
+    odom_watermark_mcb_us: int = -1  # -1: don't wait for odometry
+    image_bytes: int = 0  # filled in by pack_frame
 
     def pack(self) -> bytes:
         return FRAME_HEADER.pack(
             self.seq,
             self.capture_mcb_us,
+            self.odom_watermark_mcb_us,
             self.exposure_us,
             self.arrival_delay_us,
             self.width,
@@ -55,20 +66,35 @@ class FrameHeader:
             self.pixel_format,
             self.flags,
             0,
+            self.image_bytes,
         )
 
     @classmethod
     def unpack(cls, body: bytes) -> "FrameHeader":
-        *fields, _reserved = FRAME_HEADER.unpack_from(body)
-        return cls(*fields)
+        seq, capture, watermark, exposure, arrival, width, height, fmt, flags, _, image_bytes = (
+            FRAME_HEADER.unpack_from(body)
+        )
+        return cls(seq, capture, exposure, arrival, width, height, fmt, flags, watermark, image_bytes)
 
 
 def pack_message(magic: bytes, body: bytes) -> bytes:
     return _PREFIX.pack(magic, len(body)) + body
 
 
-def pack_frame(header: FrameHeader, image: bytes | memoryview, oracle: dict | None = None) -> bytes:
-    parts = [header.pack(), bytes(image)]
+def pack_frame(
+    header: FrameHeader,
+    image: bytes | memoryview,
+    oracle: dict | None = None,
+    compress: bool = False,
+) -> bytes:
+    data = bytes(image)
+    if compress:
+        data = zlib.compress(data, 1)
+        header.flags |= FLAG_ZLIB
+    if oracle is not None:
+        header.flags |= FLAG_ORACLE
+    header.image_bytes = len(data)
+    parts = [header.pack(), data]
     if oracle is not None:
         payload = json.dumps(oracle, separators=(",", ":")).encode()
         parts += [_U32.pack(len(payload)), payload]
@@ -95,8 +121,10 @@ def read_message(sock: socket.socket) -> tuple[bytes, bytes]:
 def parse_frame(body: bytes) -> tuple[FrameHeader, bytes, dict | None]:
     header = FrameHeader.unpack(body)
     start = FRAME_HEADER.size
-    end = start + header.width * header.height
+    end = start + header.image_bytes
     image = body[start:end]
+    if header.flags & FLAG_ZLIB:
+        image = zlib.decompress(image)
     oracle = None
     if header.flags & FLAG_ORACLE:
         (length,) = _U32.unpack_from(body, end)
@@ -125,10 +153,14 @@ class FrameServer:
         conn.sendall(pack_message(MAGIC_HELLO, json.dumps(hello).encode()))
         self._conn = conn
 
-    def send_frame(self, header: FrameHeader, image: bytes | memoryview, oracle: dict | None = None) -> None:
-        if oracle is not None:
-            header.flags |= FLAG_ORACLE
-        self._conn.sendall(pack_frame(header, image, oracle))
+    def send_frame(
+        self,
+        header: FrameHeader,
+        image: bytes | memoryview,
+        oracle: dict | None = None,
+        compress: bool = False,
+    ) -> None:
+        self._conn.sendall(pack_frame(header, image, oracle, compress))
 
     def recv_ack(self, timeout: float | None = None) -> tuple[int, int]:
         """(seq, processing_us) of the next ack from the client."""

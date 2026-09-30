@@ -51,15 +51,24 @@ def test_link_transfer_time():
     assert LinkModel(gbps=1.0).transfer_us(frame_bytes) == pytest.approx(13097, abs=5)
 
 
-def test_stream_roundtrip():
+@pytest.mark.parametrize("compress", [False, True])
+def test_stream_roundtrip(compress):
     server = FrameServer(host="127.0.0.1", port=0)
     image = np.arange(4 * 6, dtype=np.uint8).reshape(4, 6)
     oracle = {"plates": [{"corners": [[1, 2], [3, 4], [5, 6], [7, 8]], "number": "3"}]}
 
     def serve():
         server.accept({"mode": "paced", "width": 6, "height": 4}, timeout=5)
-        header = FrameHeader(seq=7, capture_mcb_us=5_006_000, exposure_us=2000, arrival_delay_us=5239, width=6, height=4)
-        server.send_frame(header, image.tobytes(), oracle)
+        header = FrameHeader(
+            seq=7,
+            capture_mcb_us=5_006_000,
+            exposure_us=2000,
+            arrival_delay_us=5239,
+            width=6,
+            height=4,
+            odom_watermark_mcb_us=5_008_000,
+        )
+        server.send_frame(header, image.tobytes(), oracle, compress=compress)
         acks.append(server.recv_ack(timeout=5))
 
     acks = []
@@ -68,7 +77,9 @@ def test_stream_roundtrip():
     client = FrameClient("127.0.0.1", server.port)
     assert client.hello["mode"] == "paced" and client.hello["protocol"] == 1
     header, data, got_oracle = client.read_frame()
-    assert header.seq == 7 and header.capture_mcb_us == 5_006_000 and header.flags == 1
+    assert header.seq == 7 and header.capture_mcb_us == 5_006_000
+    assert header.flags == (1 | 2 if compress else 1)
+    assert header.odom_watermark_mcb_us == 5_008_000 and header.arrival_delay_us == 5239
     assert np.array_equal(np.frombuffer(data, np.uint8).reshape(4, 6), image)
     assert got_oracle == oracle
     client.ack(7, 1234)
