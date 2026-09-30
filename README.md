@@ -100,6 +100,26 @@ The run is paced to the wall clock. With Northstar-CV in Docker Desktop each fra
 `--fps 166` gives the real camera rate in slow motion (the panel shows the factor). Close the
 viewer to stop; the run is saved and evaluated like any other.
 
+## Live dashboard
+
+Add `--dashboard` to `run` or `drive` and open the address it prints in any browser, on this
+machine or another device on the network (a phone works):
+
+```powershell
+.venv\Scripts\nssim drive --dashboard       # prints http://localhost:8050 and http://<this machine>:8050
+```
+
+It shows the serial traffic both ways (rate and latest values of every message type, and a
+filterable log), Northstar-CV's filter against the truth (spin, radius, center, orientation), plates
+visible vs detected, the turret's yaw against the CV's aim and the robot's true bearing, and the
+latency from capture to the frame arriving and to its aim reaching the MCB. A browser that connects
+mid-run gets the last two minutes; one left open picks up the next run by itself. Everything also
+lands in the run directory as before, now including `uart.jsonl` (every serial message, decoded).
+
+Other devices need the port open like the Jetson's: allow TCP 8050 in the firewall (see below),
+or pick another with `--dashboard-port`. It is view-only and has no login, so keep it to networks
+you trust.
+
 ## Running Northstar-CV on the Jetson
 
 The sim stays on your machine and Northstar-CV runs natively on the Jetson, so the processing time
@@ -232,6 +252,9 @@ nssim/camera       Triton2 camera model, lens effects, Bayer mosaic, frame strea
 nssim/sim          SAPIEN scene, TR assets, targets, our turret kinematics
 nssim/runner.py    paced run loop
 nssim/live.py      live viewer and keyboard driving
+nssim/bus.py       the run's event stream (serial traffic, frames, truth, errors)
+nssim/metrics.py   per-frame errors against the truth (eval.py sums them up)
+nssim/dashboard    the browser dashboard: server and page
 nssim/eval.py      metrics
 nssim/cv_build.py  Docker images + Northstar-CV build
 nssim/debug.py     re-render logged frames

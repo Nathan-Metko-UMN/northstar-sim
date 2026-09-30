@@ -28,7 +28,9 @@ from nssim.camera.stream import pack_frame
 from nssim.mcb import McbConfig, TurretState, VirtualMcb
 from nssim.mcb.link import UartLink
 from nssim.mcb.turret import TurretConfig, TurretModel
-from nssim.protocol import FrameDecoder, MsgType, encode_frame
+from nssim.bus import Bus
+from nssim.metrics import frame_errors
+from nssim.protocol import Frame, FrameDecoder, MsgType, describe, encode_frame
 from nssim.sim.assets import FLOOR_TOP_Z, TrAssets
 from nssim.sim.projection import project
 from nssim.sim.robot_constants import RobotConstants
@@ -120,14 +122,16 @@ class Runner:
         self.frames = FrameServer(port=config.frame_port)
         self.telemetry = TelemetryReceiver(port=config.telemetry_port)
         self._rx_decoder = FrameDecoder()
-        self._pending_rx: list[tuple[int, bytes]] = []  # (apply at MCB us, raw frame bytes)
+        self._tx_decoder = FrameDecoder()  # re-reads what the MCB sends, for the logs and the bus
+        self._pending_rx: list[tuple[int, Frame, bytes]] = []  # (apply at MCB us, frame, its bytes)
+        self.bus = Bus()  # everything that happens, for the dashboard (see bus.py)
         self._aims_received = 0
         self.mcb_us = config.mcb.boot_offset_us
         self.base_velocity = np.zeros(2)  # our chassis, world xy (only nonzero when driven)
         self.latest: dict[str, dict] = {}  # newest telemetry message of each type
         self._files = {
             name: open(self.out_dir / f"{name}.jsonl", "w")
-            for name in ("frames", "telemetry", "events")
+            for name in ("frames", "telemetry", "events", "uart")
         }
 
     # --- setup -----------------------------------------------------------------------------
@@ -167,8 +171,26 @@ class Runner:
 
     def _mcb_tx(self) -> None:
         for queued_us, data in self.mcb.poll_tx(self.mcb_us, self._turret_state()):
-            odometry_ts = queued_us if data[5] == MsgType.ODOMETRY else None
-            self.link.queue(queued_us, data, odometry_ts)
+            self._to_cv(queued_us, data)
+
+    def _to_cv(self, queued_us: int, data: bytes) -> None:
+        """An MCB message onto the UART; logged at the time its last byte reaches the CV."""
+        odometry_ts = queued_us if data[5] == MsgType.ODOMETRY else None
+        arrives_us = self.link.queue(queued_us, data, odometry_ts)
+        for frame in self._tx_decoder.feed(data):
+            self._uart_event("mcb_to_cv", arrives_us, frame, len(data))
+
+    def _from_cv(self, apply_us: int, frame: Frame, data: bytes) -> None:
+        """A CV message reaching the MCB at ``apply_us``, and whatever the MCB answers."""
+        self._uart_event("cv_to_mcb", apply_us, frame, len(data))
+        for queued_us, reply in self.mcb.feed_rx(data, apply_us):
+            self._to_cv(queued_us, reply)
+
+    def _uart_event(self, direction: str, t_us: float, frame: Frame, size: int) -> None:
+        name, fields = describe(frame)
+        record = {"dir": direction, "type": name, "seq": frame.seq, "fields": fields, "bytes": size}
+        self._log("uart", {"mcb_us": int(t_us), **record})
+        self.bus.publish("uart", t_us / 1e6, record)
 
     def _log(self, name: str, record: dict) -> None:
         self._files[name].write(json.dumps(record, default=_json_default) + "\n")
@@ -183,15 +205,16 @@ class Runner:
             msg["_rx_wall"] = now
             self._log("telemetry", msg)
             self.latest[msg.get("type", "?")] = msg
+            self.bus.publish(f"cv.{msg.get('type', '?')}", self.mcb_us / 1e6, msg)
 
-    def _collect_rx(self) -> list[tuple[int, bytes]]:
-        """Complete frames the CV has written so far, as (msg_type, frame bytes) for the MCB."""
+    def _collect_rx(self) -> list[tuple[Frame, bytes]]:
+        """Complete frames the CV has written so far, with their bytes for the MCB."""
         data = self.link.recv()
         frames = []
         for frame in self._rx_decoder.feed(data):
             if frame.msg_type == MsgType.TURRET_AIM_DATA:
                 self._aims_received += 1
-            frames.append((frame.msg_type, encode_frame(frame.msg_type, frame.payload, frame.seq)))
+            frames.append((frame, encode_frame(frame.msg_type, frame.payload, frame.seq)))
         return frames
 
     # --- phases ------------------------------------------------------------------------------
@@ -212,9 +235,8 @@ class Runner:
             last_wall = now_wall
             self._mcb_tx()
             self.link.flush(self.mcb_us)
-            for _, data in self._collect_rx():
-                for queued_us, reply in self.mcb.feed_rx(data, self.mcb_us):
-                    self.link.queue(queued_us, reply)
+            for frame, data in self._collect_rx():
+                self._from_cv(self.mcb_us, frame, data)
             self._drain_telemetry()
             try:
                 self.frames.accept(self._hello(), timeout=0)  # non-blocking poll
@@ -325,12 +347,14 @@ class Runner:
             rx += self._collect_rx()
         wall_aim = time.perf_counter()
         apply_base = frame.arrival_us + processing_us
-        for msg_type, data in rx:
-            self._pending_rx.append((apply_base + int(len(data) * self.link.byte_us), data))
+        aim_us = None
+        for rx_frame, data in rx:
+            apply_us = apply_base + int(len(data) * self.link.byte_us)
+            self._pending_rx.append((apply_us, rx_frame, data))
+            if rx_frame.msg_type == MsgType.TURRET_AIM_DATA and aim_us is None:
+                aim_us = apply_us
         self._drain_telemetry()
-        self._log(
-            "frames",
-            {
+        record = {
                 "seq": frame.seq,
                 "capture_us": frame.capture_us,
                 "render_us": frame.render_us,
@@ -347,13 +371,65 @@ class Runner:
                 },
                 "aim_received": self._aims_received > aims_before,
                 "gt": frame.gt,
-            },
-        )
+        }
+        self._log("frames", record)
+        if self.bus.active:
+            self._publish_frame(frame, record, aim_us)
+
+    def _publish_frame(self, frame: _PendingFrame, record: dict, aim_us: int | None) -> None:
+        """A delivered frame's timing, the truth at its capture, and the CV's errors on it."""
+        t = frame.capture_us / 1e6
+        self.bus.publish("frame", t, {
+            "seq": frame.seq,
+            "arrival_ms": (frame.arrival_us - frame.capture_us) / 1e3,
+            "processing_ms": record["processing_us"] / 1e3,
+            "aim_ms": None if aim_us is None else (aim_us - frame.capture_us) / 1e3,  # capture -> aim at the MCB
+            "image_bytes": record["image_bytes"],
+            "wall_ms": record["wall_ms"],
+        })
+        gt = frame.gt
+        base = np.asarray(gt["base_world"], float)
+        pivot = base + self.shooter.constants.yaw_offset
+        targets = []
+        for target in gt["targets"]:
+            center = np.asarray(target["center_base"], float) + base
+            targets.append({
+                "name": target["name"],
+                "number": target["number"],
+                "center": center,
+                "velocity": target["velocity"],
+                "spin": target["spin"],
+                "omega": target["omega"],
+                "bearing": float(np.arctan2(center[1] - pivot[1], center[0] - pivot[0])),
+                "distance": float(np.linalg.norm(center[:2] - pivot[:2])),
+            })
+        self.bus.publish("truth", t, {"seq": frame.seq, "turret": gt["turret"], "base": base, "targets": targets})
+
+        def this_frame(kind: str) -> dict | None:
+            msg = self.latest.get(kind)
+            return msg if msg is not None and msg.get("seq") == frame.seq else None
+
+        self.bus.publish("metrics", t, frame_errors(record, this_frame("det"), this_frame("track")))
+
+    def _publish_run(self) -> None:
+        cfg = self.config
+        self.bus.publish("run", self.mcb_us / 1e6, {
+            "name": cfg.name,
+            "fps": cfg.fps,
+            "exposure_us": cfg.exposure_us,
+            "camera": {"width": cfg.camera.width, "height": cfg.camera.height},
+            "targets": [
+                {"name": tc.spec.name, "number": tc.spec.number, "panel": tc.spec.panel,
+                 "radius": (tc.spec.radius_high + tc.spec.radius_low) / 2, "plate_height": tc.spec.z_offset}
+                for tc in cfg.targets
+            ],
+        })
 
     def run(self, hooks: RunHooks | None = None) -> Path:
         cfg = self.config
         try:
             self._startup()
+            self._publish_run()
             t0_us = self.mcb_us
             period_us = int(round(1e6 / cfg.fps))
             half_exposure = cfg.exposure_us // 2
@@ -375,9 +451,8 @@ class Runner:
                 due = [p for p in self._pending_rx if p[0] <= self.mcb_us]
                 if due:
                     self._pending_rx = [p for p in self._pending_rx if p[0] > self.mcb_us]
-                    for apply_us, data in due:
-                        for queued_us, reply in self.mcb.feed_rx(data, apply_us):
-                            self.link.queue(queued_us, reply)
+                    for apply_us, rx_frame, data in due:
+                        self._from_cv(apply_us, rx_frame, data)
 
                 aim = self.mcb.aim_state
                 self.turret.step(cfg.tick_us / 1e6, (aim.aim.yaw, aim.aim.pitch) if aim.updated else None)

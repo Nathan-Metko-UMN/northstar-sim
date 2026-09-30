@@ -93,6 +93,7 @@ def _execute(cfg, args, live: str | None, **live_options) -> None:
         from nssim.live import LiveSession
 
         session = LiveSession(runner, drive=live == "drive", show_cv=not args.no_cv_window, **live_options)
+    dashboard = _start_dashboard(args.dashboard_port, runner) if args.dashboard else None
 
     if launcher is not None:
         print("[nssim] starting Northstar-CV:", " ".join(launcher.command()), flush=True)
@@ -106,10 +107,31 @@ def _execute(cfg, args, live: str | None, **live_options) -> None:
             session.close()
         if launcher is not None:
             launcher.stop()
+        if dashboard is not None:
+            dashboard.stop()
     summary = evaluate(out_dir)
     (out_dir / "summary.json").write_text(json.dumps(summary, indent=2))
     print(format_summary(summary))
     print(f"[nssim] run saved to {out_dir} (full metrics in summary.json)")
+
+
+def _start_dashboard(port: int, runner):
+    from nssim.cv_launcher import local_address_towards
+    from nssim.dashboard import DashboardServer
+
+    server = DashboardServer(port=port)
+    try:
+        server.start()
+    except OSError as e:
+        sys.exit(f"can't serve the dashboard on port {port} ({e.strerror}); pick another with --dashboard-port")
+    runner.bus.subscribe(server)
+    urls = [f"http://localhost:{port}"]
+    try:
+        urls.append(f"http://{local_address_towards('8.8.8.8')}:{port}  (other devices on your network)")
+    except OSError:
+        pass  # no network: this machine only
+    print("[nssim] dashboard: " + "\n                   ".join(urls), flush=True)
+    return server
 
 
 def _launcher(args, cv_dir: Path):
@@ -195,6 +217,8 @@ def main(argv=None) -> None:
                       help="build the enemies with this plate height offset (default 0.03, what Northstar-CV "
                       "assumes for CU); try another team's value to see the filter cope")
     loop.add_argument("--out", help="run directory (default: runs/<time>_<scenario>)")
+    loop.add_argument("--dashboard", action="store_true", help="serve a live dashboard to browsers (any device)")
+    loop.add_argument("--dashboard-port", type=int, default=8050, metavar="PORT")
 
     run = sub.add_parser("run", parents=[common], help="run a scenario with Northstar-CV in the loop")
     run.add_argument("scenario")

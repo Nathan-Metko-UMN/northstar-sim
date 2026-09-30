@@ -11,6 +11,7 @@ from .messages import (
     RobotIdMsg,
     TurretAimData,
     decode,
+    describe,
     encode,
 )
 
@@ -27,6 +28,7 @@ __all__ = [
     "crc8",
     "crc16",
     "decode",
+    "describe",
     "encode",
     "encode_frame",
 ]

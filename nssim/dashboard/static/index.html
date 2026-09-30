@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>nssim dashboard</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header>
+  <div class="brand">nssim<span id="run-name"></span></div>
+  <div id="conn" class="pill">connecting…</div>
+  <div class="stats">
+    <div><span class="k">sim</span><span class="v" id="s-time">–</span></div>
+    <div><span class="k">real time</span><span class="v" id="s-rtf">–</span></div>
+    <div><span class="k">camera</span><span class="v" id="s-fps">–</span></div>
+    <div><span class="k">CV</span><span class="v" id="s-cv">–</span></div>
+    <div><span class="k">frame → aim</span><span class="v" id="s-aim">–</span></div>
+  </div>
+  <div class="controls">
+    <label for="window">window</label>
+    <select id="window">
+      <option value="10">10 s</option>
+      <option value="30" selected>30 s</option>
+      <option value="120">2 min</option>
+    </select>
+    <button id="pause" aria-pressed="false">Pause</button>
+  </div>
+</header>
+
+<main>
+  <section class="panel">
+    <h2>Tracking</h2>
+    <dl class="values" id="tracking"></dl>
+  </section>
+
+  <section class="panel">
+    <h2>UART · MCB → CV</h2>
+    <table>
+      <thead><tr><th>message</th><th class="num">rate</th><th class="num">count</th><th>latest</th></tr></thead>
+      <tbody id="t-mcb_to_cv"><tr><td colspan="4" class="empty">nothing yet</td></tr></tbody>
+    </table>
+  </section>
+
+  <section class="panel">
+    <h2>UART · CV → MCB</h2>
+    <table>
+      <thead><tr><th>message</th><th class="num">rate</th><th class="num">count</th><th>latest</th></tr></thead>
+      <tbody id="t-cv_to_mcb"><tr><td colspan="4" class="empty">nothing yet</td></tr></tbody>
+    </table>
+  </section>
+
+  <section class="panel">
+    <h2>Turret yaw</h2>
+    <canvas class="plot" id="p-yaw"></canvas>
+    <div class="hint">What the MCB reports, what Northstar-CV asks for, and where the tracked robot really is.</div>
+  </section>
+
+  <section class="panel">
+    <h2>Spin rate</h2>
+    <canvas class="plot" id="p-spin"></canvas>
+  </section>
+
+  <section class="panel">
+    <h2>Filter center error</h2>
+    <canvas class="plot" id="p-center"></canvas>
+  </section>
+
+  <section class="panel">
+    <h2>Filter radius and orientation error</h2>
+    <canvas class="plot" id="p-radius"></canvas>
+    <canvas class="plot" id="p-orient"></canvas>
+  </section>
+
+  <section class="panel">
+    <h2>Plates per frame</h2>
+    <canvas class="plot" id="p-plates"></canvas>
+    <div class="hint">Visible: facing the camera, unblocked, in the image and less than 70° edge-on.</div>
+  </section>
+
+  <section class="panel">
+    <h2>Latency</h2>
+    <canvas class="plot" id="p-latency"></canvas>
+    <div class="hint">From capture: the frame arriving at Northstar-CV, and its aim reaching the MCB.</div>
+  </section>
+
+  <section class="panel wide">
+    <h2>Messages</h2>
+    <div class="log-controls" id="log-filters"></div>
+    <div id="log"></div>
+  </section>
+</main>
+
+<script src="/static/plot.js"></script>
+<script src="/static/app.js"></script>
+</body>
+</html>

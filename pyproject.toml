@@ -12,6 +12,7 @@ dependencies = [
     "opencv-python",
     "pyyaml",
     "dacite",
+    "aiohttp>=3.9",  # the dashboard's web server
 ]
 
 [project.optional-dependencies]
@@ -32,6 +33,9 @@ nssim = "nssim.cli:main"
 
 [tool.setuptools.packages.find]
 include = ["nssim*"]
+
+[tool.setuptools.package-data]
+"nssim.dashboard" = ["static/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

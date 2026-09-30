@@ -6,6 +6,7 @@ Northstar-CV's ``src/uart/messages``. All fields are packed little-endian.
 
 from __future__ import annotations
 
+import dataclasses
 import struct
 from dataclasses import dataclass
 from enum import IntEnum
@@ -171,3 +172,18 @@ def decode(frame: Frame):
         return Empty(msg_type)
     decoder = _DECODERS.get(msg_type)
     return decoder(frame.payload) if decoder else frame
+
+
+def describe(frame: Frame) -> tuple[str, dict]:
+    """(type name, decoded fields) of a frame, for logs and the dashboard."""
+    msg = decode(frame)
+    if isinstance(msg, Frame):
+        try:
+            name = MsgType(frame.msg_type).name
+        except ValueError:
+            name = f"TYPE_{frame.msg_type}"
+        return name, {"payload": frame.payload.hex()}
+    if isinstance(msg, Empty):
+        return msg.msg_type.name, {}
+    fields = {f.name: getattr(msg, f.name) for f in dataclasses.fields(msg)}
+    return msg.TYPE.name, fields
