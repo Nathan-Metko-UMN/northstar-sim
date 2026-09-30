@@ -1,0 +1,43 @@
+[build-system]
+requires = ["setuptools>=64", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "nssim"
+version = "0.1.0"
+description = "Hardware-in-the-loop test harness for Northstar-CV auto-aim, built on the TR ARCTIC 2026 simulator"
+requires-python = ">=3.10,<3.13"
+dependencies = [
+    "numpy<2",
+    "opencv-python",
+    "pyyaml",
+]
+
+[project.optional-dependencies]
+# The simulator itself (SAPIEN renders through Vulkan; PyTorch can be the CPU build).
+sim = [
+    "sapien==3.0.3",
+    "mani_skill==3.0.0b22",
+    "coacd",
+    "torch",
+]
+viz = [
+    "foxglove-sdk",
+    "mcap",
+]
+dev = [
+    "pytest",
+]
+
+[project.scripts]
+nssim = "nssim.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["nssim*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "docker: needs Docker and the northstar-cv:dev image (Linux-only C++ conformance tests)",
+    "sim: needs the simulator stack (sapien, mani_skill) and a Vulkan device",
+]

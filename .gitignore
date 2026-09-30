@@ -1,0 +1,16 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+*.egg-info/
+.pytest_cache/
+
+# Local scratch space (logs, probes, benchmark output)
+.scratch/
+
+# Run outputs
+runs/
+*.mcap
+
+# Build output of the C++ conformance helpers
+tests/cpp/build/
