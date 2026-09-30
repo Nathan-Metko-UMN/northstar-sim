@@ -22,7 +22,7 @@ from pathlib import Path
 
 import numpy as np
 
-from nssim.camera import CameraModel, FrameHeader, FrameServer, LinkModel, mosaic_rggb
+from nssim.camera import CameraModel, FrameHeader, FrameServer, LinkModel, Optics, apply_optics, mosaic_rggb
 from nssim.mcb import McbConfig, TurretState, VirtualMcb
 from nssim.mcb.link import UartLink
 from nssim.mcb.turret import TurretConfig, TurretModel
@@ -30,7 +30,7 @@ from nssim.protocol import FrameDecoder, MsgType, encode_frame
 from nssim.sim.assets import FLOOR_TOP_Z, TrAssets
 from nssim.sim.projection import project
 from nssim.sim.robot_constants import RobotConstants
-from nssim.sim.scene import ArenaScene, Lighting
+from nssim.sim.scene import Appearance, ArenaScene
 from nssim.sim.shooter import Shooter
 from nssim.sim.targets import Motion, Target, TargetSpec, light_bar_corners
 from nssim.telemetry import TelemetryReceiver
@@ -50,7 +50,8 @@ class RunConfig:
     exposure_us: int = 2000
     link: LinkModel = field(default_factory=LinkModel)
     camera: CameraModel = field(default_factory=CameraModel)
-    lighting: Lighting = field(default_factory=Lighting)
+    optics: Optics = field(default_factory=Optics)
+    appearance: Appearance = field(default_factory=Appearance)
     tick_us: int = 1000
     shooter_base_xy: list[float] = field(default_factory=lambda: [-1.5, 0.0])
     initial_aim: str | list[float] | None = None  # target name to face at t=0, or [yaw, pitch]
@@ -93,7 +94,7 @@ class Runner:
         self.assets = assets or TrAssets()
         self.shooter = Shooter(constants, [*config.shooter_base_xy, FLOOR_TOP_Z])
         self.targets = {tc.spec.name: Target(tc.spec, tc.motion, FLOOR_TOP_Z) for tc in config.targets}
-        self.scene = ArenaScene(self.assets, config.camera, config.lighting)
+        self.scene = ArenaScene(self.assets, config.camera, config.appearance)
         for tc in config.targets:
             self.scene.add_target(tc.spec)
 
@@ -333,7 +334,7 @@ class Runner:
 
                 if self.mcb_us >= next_render_us:
                     gt, cam_pose, states = self._ground_truth(t)
-                    rgb = self.scene.render(cam_pose, states)
+                    rgb = apply_optics(self.scene.render(cam_pose, states), cfg.optics)
                     capture_us = next_render_us + half_exposure
                     start = max(capture_us, link_free_us)
                     link_free_us = start + cfg.link.transfer_us(frame_bytes)

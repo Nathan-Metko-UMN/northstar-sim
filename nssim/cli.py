@@ -78,12 +78,14 @@ def cmd_preview(args) -> None:
     import cv2
     import numpy as np
 
+    from nssim.camera import apply_optics, demosaic_to_bgr, mosaic_rggb
+
     cfg = _config(args)
     cfg.frame_port = cfg.uart_port = cfg.telemetry_port = 0  # any free port; nothing connects
     runner = _runner(cfg, _cv_dir(args.cv_dir), REPO_ROOT / ".scratch" / "preview_run")
     gt, cam_pose, states = runner._ground_truth(args.time)
-    rgb = runner.scene.render(cam_pose, states)
-    bgr = cv2.cvtColor(np.ascontiguousarray(rgb), cv2.COLOR_RGB2BGR)
+    # What Northstar-CV gets: lens effects, the sensor's Bayer mosaic, then its debayer.
+    bgr = demosaic_to_bgr(mosaic_rggb(apply_optics(runner.scene.render(cam_pose, states), cfg.optics)))
     for target in gt["targets"]:
         for plate in target["plates"]:
             for u, v in np.asarray(plate["corners_px"]):
@@ -91,6 +93,14 @@ def cmd_preview(args) -> None:
                     cv2.circle(bgr, (int(round(u)), int(round(v))), 3, (0, 255, 0) if plate["facing"] else (0, 0, 255), 1)
     out = Path(args.out or REPO_ROOT / ".scratch" / f"preview_{cfg.name}.png")
     cv2.imwrite(str(out), bgr)
+    print(f"[nssim] wrote {out}")
+
+
+def cmd_frame(args) -> None:
+    from nssim.debug import render_logged_frame
+
+    out = Path(args.out or REPO_ROOT / ".scratch" / f"frame_{Path(args.run_dir).name}_{args.seq}.png")
+    render_logged_frame(Path(args.run_dir), args.seq, _cv_dir(args.cv_dir), out)
     print(f"[nssim] wrote {out}")
 
 
@@ -121,6 +131,13 @@ def main(argv=None) -> None:
     pv.add_argument("--cv-dir")
     pv.add_argument("--out")
     pv.set_defaults(func=cmd_preview)
+
+    fr = sub.add_parser("frame", help="re-render a logged frame with ground truth and detections")
+    fr.add_argument("run_dir")
+    fr.add_argument("seq", type=int)
+    fr.add_argument("--cv-dir")
+    fr.add_argument("--out")
+    fr.set_defaults(func=cmd_frame)
 
     args = parser.parse_args(argv)
     args.func(args)

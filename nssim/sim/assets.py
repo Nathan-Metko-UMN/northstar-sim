@@ -54,7 +54,18 @@ class LightBarGeometry:
     half_spacing: float  # |x| of each bar's centerline
     y_center: float
     half_height: float
+    half_width: float
     z_front: float  # front surface of the bars
+
+
+@dataclass(frozen=True)
+class MeshPart:
+    """One part (material group) of a mesh: arrays as SAPIEN loaded them."""
+
+    vertices: np.ndarray  # (n, 3) float32
+    triangles: np.ndarray  # (m, 3) uint32
+    normals: np.ndarray  # (n, 3) float32
+    uvs: np.ndarray  # (n, 2) float32
 
 
 @dataclass(frozen=True)
@@ -74,6 +85,7 @@ class TrAssets:
     def __init__(self, tr_dir: Path | None = None, plate_dims: dict[str, tuple[float, float]] | None = None):
         """``plate_dims``: {"small"|"large": (bar spacing, bar length)} to scale panels to; None keeps TR's."""
         self.plate_dims = plate_dims
+        self._part_cache: dict[str, list[MeshPart]] = {}
         root = Path(tr_dir) if tr_dir else default_tr_dir()
         self.models_dir = root / "src" / "tr-simulation-maniskill" / "resource" / "models"
         if not (self.models_dir / "field" / FIELD_FLOOR).is_file():
@@ -104,24 +116,44 @@ class TrAssets:
             half_spacing=spacing / 2,
             y_center=bars.y_center * sy,
             half_height=length / 2,
+            half_width=bars.half_width * sx,
             z_front=bars.z_front,
         )
         return PlateGeometry((sx, sy, 1.0), scaled)
 
-    def _measure_light_bars(self, kind: str) -> LightBarGeometry:
-        import sapien
+    def panel_front_z(self, kind: str) -> float:
+        """Front-most z (out of the plate) of the whole panel mesh."""
+        return float(max(part.vertices[:, 2].max() for part in self._parts(kind)))
 
-        scene = sapien.Scene()
-        builder = scene.create_actor_builder()
-        builder.add_visual_from_file(str(self.panel_file(kind)))
-        actor = builder.build_kinematic(name=kind)
-        body = actor.find_component_by_type(sapien.render.RenderBodyComponent)
-        verts = np.asarray(body.render_shapes[0].parts[PANEL_MODELS[kind].bars].vertices)
+    def symbol_mesh(self, kind: str) -> MeshPart:
+        """The number/icon sticker of a panel (unscaled mesh coordinates)."""
+        return self._parts(kind)[PANEL_MODELS[kind].symbol]
+
+    def _parts(self, kind: str) -> list[MeshPart]:
+        if kind not in self._part_cache:
+            import sapien
+
+            shape = sapien.render.RenderShapeTriangleMesh(str(self.panel_file(kind)), np.ones(3, np.float32), None)
+            self._part_cache[kind] = [
+                MeshPart(
+                    vertices=np.asarray(part.vertices, np.float32),
+                    triangles=np.asarray(part.triangles, np.uint32),
+                    normals=np.asarray(part.get_vertex_normal(), np.float32),
+                    uvs=np.asarray(part.get_vertex_uv(), np.float32),
+                )
+                for part in shape.parts
+            ]
+        return self._part_cache[kind]
+
+    def _measure_light_bars(self, kind: str) -> LightBarGeometry:
+        verts = self._parts(kind)[PANEL_MODELS[kind].bars].vertices
         left, right = verts[verts[:, 0] < 0], verts[verts[:, 0] > 0]
         centers = [(v[:, 0].min() + v[:, 0].max()) / 2 for v in (left, right)]
+        widths = [v[:, 0].max() - v[:, 0].min() for v in (left, right)]
         return LightBarGeometry(
             half_spacing=float((centers[1] - centers[0]) / 2),
             y_center=float((verts[:, 1].min() + verts[:, 1].max()) / 2),
             half_height=float((verts[:, 1].max() - verts[:, 1].min()) / 2),
+            half_width=float(np.mean(widths) / 2),
             z_front=float(verts[:, 2].max()),
         )
