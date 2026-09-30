@@ -1,42 +1,86 @@
-// A small time-series plot on a canvas: a few series against the run's clock, over a sliding
-// window, with an auto-scaled y axis and a legend holding the latest values. No libraries, so the
-// page works without internet.
+// A time-series plot on a canvas. It draws what it is given (times in seconds since the run
+// started) over a time range, and turns gestures into requests to whoever owns the time range:
+// drag to zoom to a range, Shift+drag (or middle-drag) to pan, Ctrl+scroll or pinch to zoom around
+// the pointer, double-click to go back to live. Hovering shows the values under the pointer.
+// No libraries, so the page works without internet.
 "use strict";
 
 class TimePlot {
-  // options: { unit, series: [{ name, color }], zero: bool (keep 0 in view), wrap: period (angles:
-  // lines break where the value wraps), digits }
-  constructor(canvas, options) {
+  // handlers: { zoom(t0, t1), pan(dt), scale(tCenter, factor), live() }
+  constructor(canvas, handlers) {
     this.canvas = canvas;
-    this.unit = options.unit || "";
-    this.zero = !!options.zero;
-    this.wrap = options.wrap || 0;
-    this.digits = options.digits ?? 2;
-    this.series = options.series.map((s) => ({ ...s, t: [], v: [] }));
-    this.keepS = 600; // older points are dropped
+    this.handlers = handlers;
+    this.area = null; // plot area and time range of the last draw
+    this.hoverX = null;
+    this.drag = null;
+    this.last = null; // arguments of the last draw, to redraw for hover and selection
+    this._bind();
   }
 
-  push(index, t, value) {
-    const s = this.series[index];
-    const n = s.t.length;
-    if (n && t < s.t[n - 1]) return; // out of order (e.g. a late event): skip rather than tangle
-    s.t.push(t);
-    s.v.push(value === null || value === undefined || !Number.isFinite(value) ? NaN : value);
-    if (n > 8192 && t - s.t[0] > this.keepS) {
-      const cut = lowerBound(s.t, t - this.keepS);
-      s.t.splice(0, cut);
-      s.v.splice(0, cut);
-    }
+  timeAt(x) {
+    const a = this.area;
+    return a.t0 + ((x - a.left) / a.w) * (a.t1 - a.t0);
   }
 
-  clear() {
-    for (const s of this.series) {
-      s.t.length = 0;
-      s.v.length = 0;
-    }
+  _bind() {
+    const c = this.canvas;
+    c.addEventListener("pointerdown", (e) => {
+      if (!this.area || (e.button !== 0 && e.button !== 1)) return;
+      const pan = e.shiftKey || e.button === 1;
+      this.drag = { mode: pan ? "pan" : "select", x0: e.offsetX, x1: e.offsetX, lastX: e.offsetX };
+      c.setPointerCapture(e.pointerId);
+      e.preventDefault();
+    });
+    c.addEventListener("pointermove", (e) => {
+      if (!this.area) return;
+      if (this.drag) {
+        if (this.drag.mode === "pan") {
+          const dt = -((e.offsetX - this.drag.lastX) / this.area.w) * (this.area.t1 - this.area.t0);
+          this.drag.lastX = e.offsetX;
+          if (dt) this.handlers.pan(dt);
+        } else {
+          this.drag.x1 = e.offsetX;
+          this.redraw();
+        }
+      } else {
+        this.hoverX = e.offsetX;
+        this.redraw();
+      }
+    });
+    const finish = (e, cancelled) => {
+      const drag = this.drag;
+      this.drag = null;
+      if (drag && drag.mode === "select" && !cancelled && Math.abs(drag.x1 - drag.x0) > 4) {
+        const a = this.timeAt(Math.min(drag.x0, drag.x1));
+        const b = this.timeAt(Math.max(drag.x0, drag.x1));
+        this.handlers.zoom(a, b);
+      }
+      this.redraw();
+    };
+    c.addEventListener("pointerup", (e) => finish(e, false));
+    c.addEventListener("pointercancel", (e) => finish(e, true)); // e.g. the page scrolled instead
+    c.addEventListener("pointerleave", () => {
+      if (!this.drag) {
+        this.hoverX = null;
+        this.redraw();
+      }
+    });
+    c.addEventListener("wheel", (e) => {
+      if (!this.area || !(e.ctrlKey || e.metaKey)) return; // plain scrolling scrolls the page
+      e.preventDefault();
+      this.handlers.scale(this.timeAt(e.offsetX), Math.exp(e.deltaY * 0.003));
+    }, { passive: false });
+    c.addEventListener("dblclick", () => this.handlers.live());
   }
 
-  draw(tEnd, windowS) {
+  redraw() {
+    if (this.last) this.draw(...this.last);
+  }
+
+  // series: [{ label, color, unit, scale, wrap, t: [], v: [] }] (raw values; scale and wrap are
+  // applied while drawing). y: { auto, zero, min, max }.
+  draw(series, t0, t1, y, digits = 2) {
+    this.last = [series, t0, t1, y, digits];
     const canvas = this.canvas;
     const dpr = window.devicePixelRatio || 1;
     const cssW = canvas.clientWidth;
@@ -53,16 +97,28 @@ class TimePlot {
     const css = getComputedStyle(document.documentElement);
     const gridColor = css.getPropertyValue("--grid");
     const mutedColor = css.getPropertyValue("--muted");
+    const textColor = css.getPropertyValue("--text");
+    const accent = css.getPropertyValue("--accent");
     const font = "11px " + css.getPropertyValue("--mono");
-
-    // Legend first: it wraps onto more lines on a narrow screen, and the plot starts below it.
     ctx.font = font;
+
+    const value = (s, i) => {
+      let v = s.v[i] * (s.scale || 1);
+      if (s.wrap) v = ((((v + s.wrap / 2) % s.wrap) + s.wrap) % s.wrap) - s.wrap / 2;
+      return v;
+    };
+
+    // Legend first (it wraps on narrow screens; the plot starts below it). Values are the ones
+    // under the pointer, or the newest in view.
+    const hoverT = this.area && this.hoverX !== null && this.hoverX >= this.area.left && this.hoverX <= this.area.left + this.area.w
+      ? this.timeAt(this.hoverX) : null;
     const legend = [];
     let lx = 48, row = 0;
-    for (const s of this.series) {
-      const latest = lastFinite(s.v);
-      const value = latest === null ? "–" : latest.toFixed(this.digits);
-      const label = `${s.name} ${value}${this.unit ? " " + this.unit : ""}`;
+    for (const s of series) {
+      const i = hoverT === null ? lastIndexAtOrBefore(s, t1) : nearestIndex(s, hoverT);
+      const v = i < 0 ? NaN : value(s, i);
+      const shown = Number.isFinite(v) ? v.toFixed(digits) : "–";
+      const label = `${s.label} ${shown}${s.unit ? " " + s.unit : ""}`;
       const width = ctx.measureText(label).width + 14;
       if (lx > 48 && lx + width > cssW - 8) {
         lx = 48;
@@ -73,44 +129,51 @@ class TimePlot {
     }
 
     const left = 48, right = 8, top = 22 + row * 14, bottom = 18;
-    const w = cssW - left - right;
-    const h = cssH - top - bottom;
-    // Until the run is a window long, fill from its start instead of showing empty time before it.
-    const t0 = Math.max(0, tEnd - windowS);
-    tEnd = t0 + windowS;
+    const w = Math.max(10, cssW - left - right);
+    const h = Math.max(10, cssH - top - bottom);
+    this.area = { left, top, w, h, t0, t1 };
+    const span = t1 - t0 || 1;
+    const x = (t) => left + ((t - t0) / span) * w;
 
-    // y range: what is visible, ignoring the extreme 1% on each side so one spike (the CV warming
-    // up, say) doesn't flatten everything else. Points beyond the range are clipped.
-    const sample = [];
-    for (const s of this.series) {
-      const start = lowerBound(s.t, t0);
-      const step = Math.max(1, Math.floor((s.t.length - start) / 1000));
-      for (let i = start; i < s.t.length; i += step) {
-        if (Number.isFinite(s.v[i])) sample.push(s.v[i]);
-      }
-    }
-    let lo = Infinity, hi = -Infinity;
-    if (sample.length > 50) {
-      sample.sort((a, b) => a - b);
-      lo = sample[Math.floor(sample.length * 0.01)];
-      hi = sample[Math.ceil(sample.length * 0.99) - 1];
+    // y range: fixed, or what is visible without its extreme 1% on each side (so one spike, like
+    // the CV warming up, doesn't flatten the rest; points beyond are clipped).
+    let lo, hi;
+    if (!y.auto && Number.isFinite(y.min) && Number.isFinite(y.max) && y.max > y.min) {
+      lo = y.min;
+      hi = y.max;
     } else {
-      for (const v of sample) {
-        if (v < lo) lo = v;
-        if (v > hi) hi = v;
+      const sample = [];
+      for (const s of series) {
+        const start = lowerBound(s.t, t0);
+        const end = lowerBound(s.t, t1 + 1e-9);
+        const step = Math.max(1, Math.floor((end - start) / 1000));
+        for (let i = start; i < end; i += step) {
+          const v = value(s, i);
+          if (Number.isFinite(v)) sample.push(v);
+        }
       }
+      lo = Infinity;
+      hi = -Infinity;
+      if (sample.length > 50) {
+        sample.sort((a, b) => a - b);
+        lo = sample[Math.floor(sample.length * 0.01)];
+        hi = sample[Math.ceil(sample.length * 0.99) - 1];
+      } else {
+        for (const v of sample) {
+          if (v < lo) lo = v;
+          if (v > hi) hi = v;
+        }
+      }
+      if (!Number.isFinite(lo)) { lo = 0; hi = 1; }
+      if (y.zero) { lo = Math.min(lo, 0); hi = Math.max(hi, 0); }
+      if (hi - lo < 1e-9) { lo -= 1; hi += 1; }
+      const pad = (hi - lo) * 0.08;
+      lo -= pad;
+      hi += pad;
     }
-    if (!Number.isFinite(lo)) { lo = 0; hi = 1; }
-    if (this.zero) { lo = Math.min(lo, 0); hi = Math.max(hi, 0); }
-    if (hi - lo < 1e-9) { lo -= 1; hi += 1; }
-    const pad = (hi - lo) * 0.08;
-    lo -= pad;
-    hi += pad;
-    const x = (t) => left + ((t - t0) / windowS) * w;
-    const y = (v) => top + (1 - (v - lo) / (hi - lo)) * h;
+    const yOf = (v) => top + (1 - (v - lo) / (hi - lo)) * h;
 
     // grid and labels
-    ctx.font = font;
     ctx.lineWidth = 1;
     ctx.strokeStyle = gridColor;
     ctx.fillStyle = mutedColor;
@@ -118,7 +181,7 @@ class TimePlot {
     ctx.textBaseline = "middle";
     const yStep = niceStep((hi - lo) / 4);
     for (let v = Math.ceil(lo / yStep) * yStep; v <= hi; v += yStep) {
-      const py = Math.round(y(v)) + 0.5;
+      const py = Math.round(yOf(v)) + 0.5;
       ctx.beginPath();
       ctx.moveTo(left, py);
       ctx.lineTo(left + w, py);
@@ -127,8 +190,8 @@ class TimePlot {
     }
     ctx.textAlign = "center";
     ctx.textBaseline = "top";
-    const tStep = niceStep(windowS / 5);
-    for (let t = Math.ceil(t0 / tStep) * tStep; t <= tEnd; t += tStep) {
+    const tStep = niceStep(span / 5);
+    for (let t = Math.ceil(t0 / tStep) * tStep; t <= t1; t += tStep) {
       const px = Math.round(x(t)) + 0.5;
       ctx.beginPath();
       ctx.moveTo(px, top);
@@ -144,28 +207,61 @@ class TimePlot {
     ctx.clip();
     ctx.lineWidth = 1.5;
     ctx.lineJoin = "round";
-    for (const s of this.series) {
+    let anyData = false;
+    for (const s of series) {
       const start = Math.max(0, lowerBound(s.t, t0) - 1);
-      const n = s.t.length - start;
-      const stride = Math.max(1, Math.floor(n / (w * 2))); // no more than ~2 points per pixel
+      const end = Math.min(s.t.length, lowerBound(s.t, t1 + 1e-9) + 1);
+      const stride = Math.max(1, Math.floor((end - start) / (w * 2))); // ~2 points per pixel at most
       ctx.strokeStyle = s.color;
       ctx.beginPath();
       let pen = false, last = NaN;
-      for (let i = start; i < s.t.length; i += stride) {
-        const v = s.v[i];
-        if (Number.isNaN(v)) { pen = false; continue; }
-        if (pen && this.wrap && Math.abs(v - last) > this.wrap / 2) pen = false;
-        const px = x(s.t[i]), py = y(v);
+      for (let i = start; i < end; i += stride) {
+        const v = value(s, i);
+        if (!Number.isFinite(v)) { pen = false; continue; }
+        if (pen && s.wrap && Math.abs(v - last) > s.wrap / 2) pen = false;
+        const px = x(s.t[i]), py = yOf(v);
         if (pen) ctx.lineTo(px, py);
         else ctx.moveTo(px, py);
         pen = true;
         last = v;
+        anyData = true;
       }
       ctx.stroke();
     }
     ctx.restore();
 
-    // legend: name and latest value
+    if (!anyData) {
+      ctx.fillStyle = mutedColor;
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText(series.length ? "no data in this range" : "no signals: edit this graph to add some", left + w / 2, top + h / 2);
+    }
+
+    // pointer line, selection
+    if (hoverT !== null && !this.drag) {
+      const px = Math.round(this.hoverX) + 0.5;
+      ctx.strokeStyle = textColor;
+      ctx.globalAlpha = 0.35;
+      ctx.beginPath();
+      ctx.moveTo(px, top);
+      ctx.lineTo(px, top + h);
+      ctx.stroke();
+      ctx.globalAlpha = 1;
+      ctx.fillStyle = textColor;
+      ctx.textAlign = "left";
+      ctx.textBaseline = "top";
+      ctx.fillText(`${hoverT.toFixed(3)} s`, Math.min(px + 4, left + w - 70), top + 2);
+    }
+    if (this.drag && this.drag.mode === "select") {
+      const a = Math.max(left, Math.min(this.drag.x0, this.drag.x1));
+      const b = Math.min(left + w, Math.max(this.drag.x0, this.drag.x1));
+      ctx.fillStyle = accent;
+      ctx.globalAlpha = 0.18;
+      ctx.fillRect(a, top, b - a, h);
+      ctx.globalAlpha = 1;
+    }
+
+    // legend
     ctx.textAlign = "left";
     ctx.textBaseline = "middle";
     for (const item of legend) {
@@ -187,6 +283,20 @@ function lowerBound(sorted, value) {
   return lo;
 }
 
+function lastIndexAtOrBefore(s, t) {
+  for (let i = Math.min(lowerBound(s.t, t + 1e-9), s.t.length) - 1, n = 0; i >= 0 && n < 200; i--, n++) {
+    if (Number.isFinite(s.v[i])) return i;
+  }
+  return -1;
+}
+
+function nearestIndex(s, t) {
+  const i = lowerBound(s.t, t);
+  if (i <= 0) return s.t.length ? 0 : -1;
+  if (i >= s.t.length) return s.t.length - 1;
+  return t - s.t[i - 1] < s.t[i] - t ? i - 1 : i;
+}
+
 function niceStep(raw) {
   const exp = Math.pow(10, Math.floor(Math.log10(raw)));
   const f = raw / exp;
@@ -196,11 +306,4 @@ function niceStep(raw) {
 function formatTick(value, step) {
   const digits = Math.max(0, -Math.floor(Math.log10(step)));
   return value.toFixed(Math.min(digits, 3));
-}
-
-function lastFinite(values) {
-  for (let i = values.length - 1; i >= 0 && i >= values.length - 50; i--) {
-    if (Number.isFinite(values[i])) return values[i];
-  }
-  return null;
 }

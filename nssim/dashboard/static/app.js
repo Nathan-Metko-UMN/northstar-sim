@@ -1,40 +1,68 @@
-// nssim dashboard: turns the run's events (see nssim/bus.py) into tables, plots and a message log.
-// Everything is keyed on the run's clock (the MCB clock in the sim), shown as seconds since the run
-// started. Panels without data (no ground truth on the real robot, say) just stay empty.
+// nssim dashboard: tabs of graphs over any signal of the run, a shared time range (live, paused,
+// zoomed), and on the Overview tab the serial traffic, tracking values and message log.
+// Times are seconds since the run started. Panels without data (no ground truth on the real robot,
+// say) just stay empty.
 "use strict";
 
 const $ = (id) => document.getElementById(id);
 const DEG = 180 / Math.PI;
-const css = getComputedStyle(document.documentElement);
-const C = ["--c1", "--c2", "--c3", "--c4"].map((name) => css.getPropertyValue(name).trim());
-
-const plots = {
-  yaw: new TimePlot($("p-yaw"), { unit: "°", wrap: 360, digits: 1, series: [
-    { name: "turret", color: C[0] }, { name: "CV aim", color: C[1] }, { name: "robot", color: C[2] }] }),
-  spin: new TimePlot($("p-spin"), { unit: "rad/s", zero: true, series: [
-    { name: "true", color: C[2] }, { name: "filter", color: C[0] }] }),
-  center: new TimePlot($("p-center"), { unit: "cm", zero: true, digits: 1, series: [
-    { name: "horizontal", color: C[0] }, { name: "height", color: C[1] }] }),
-  radius: new TimePlot($("p-radius"), { unit: "cm", zero: true, digits: 1, series: [
-    { name: "radius", color: C[0] }] }),
-  orient: new TimePlot($("p-orient"), { unit: "°", zero: true, digits: 1, series: [
-    { name: "orientation (mod 180°)", color: C[3] }] }),
-  plates: new TimePlot($("p-plates"), { zero: true, digits: 0, series: [
-    { name: "visible", color: C[2] }, { name: "detected", color: C[0] }] }),
-  latency: new TimePlot($("p-latency"), { unit: "ms", zero: true, digits: 1, series: [
-    { name: "arrival", color: C[2] }, { name: "CV processing", color: C[0] }, { name: "aim at MCB", color: C[1] }] }),
-};
-
 const LOG_KEEP = 600;
 const LOG_SHOWN = 250;
-const LOG_OFF_BY_DEFAULT = new Set(["ODOMETRY"]); // 250 Hz; switch it on to see it
+const LOG_OFF_BY_DEFAULT = new Set(["ODOMETRY"]); // 250 Hz; tick it to see it
 
+const hub = new SignalHub();
+const layout = new Layout();
 let state;
 let logFilters = new Map(); // message type -> shown (kept across runs)
+let graphViews = []; // the active tab's graphs
+let ws = null;
+let subscribed = new Set();
+let subscribedKey = "";
+let catalogVersion = -1;
 
-function reset() {
+// --- the time range every graph shows ----------------------------------------------------
+
+const view = {
+  live: true,
+  windowS: 30,
+  t0: 0,
+  t1: 30,
+  range() {
+    if (!this.live) return [this.t0, this.t1];
+    const start = Math.max(0, state.tNow - this.windowS); // fill from the run's start until it's a window long
+    return [start, start + this.windowS];
+  },
+  set(t0, t1) {
+    if (!(t1 > t0)) return;
+    this.live = false;
+    this.t0 = t0;
+    this.t1 = Math.max(t1, t0 + 0.001);
+    updateTimeControls();
+    requestDraw();
+  },
+  pause() {
+    const [a, b] = this.range();
+    this.set(a, b);
+  },
+  goLive() {
+    this.live = true;
+    updateTimeControls();
+    requestDraw();
+  },
+  handlers: {
+    zoom: (a, b) => view.set(a, b),
+    pan: (dt) => { const [a, b] = view.range(); view.set(a + dt, b + dt); },
+    scale: (tc, f) => { const [a, b] = view.range(); view.set(tc - (tc - a) * f, tc + (b - tc) * f); },
+    live: () => view.goLive(),
+  },
+};
+
+const app = { hub, layout, view, requestDraw, graphsChanged, removeGraph };
+
+// --- panel state ---------------------------------------------------------------------------
+
+function resetState() {
   state = {
-    t0: null,
     tNow: 0,
     run: null,
     ended: false,
@@ -43,20 +71,11 @@ function reset() {
     frames: [], // {t, wall} of recent frames, for the frame rate and real-time factor
     lastFrame: null,
     lastMetrics: null,
-    lastTruth: null,
     lastTrack: null,
     lastAim: null,
-    lastOdomPlot: -Infinity,
-    tracked: null,
   };
-  for (const plot of Object.values(plots)) plot.clear();
   $("run-name").textContent = "";
 }
-
-let paused = false;
-let windowS = 30;
-
-// --- events -------------------------------------------------------------------------------
 
 function ingest(event) {
   const { topic, data } = event;
@@ -67,18 +86,17 @@ function ingest(event) {
   }
   if (topic === "run") {
     state.run = data;
-    state.t0 = event.t;
-    $("run-name").textContent = data.name;
+    $("run-name").textContent = data.replay ? `${data.name} (replay)` : data.name;
     return;
   }
-  if (state.t0 === null) state.t0 = event.t;
-  const t = event.t - state.t0;
+  const t = event.t - hub.offset;
   if (t > state.tNow) state.tNow = t;
-
   if (topic === "uart") onUart(t, data);
-  else if (topic === "frame") onFrame(t, data, event.wall);
-  else if (topic === "truth") onTruth(t, data);
-  else if (topic === "metrics") onMetrics(t, data);
+  else if (topic === "frame") {
+    state.lastFrame = data;
+    state.frames.push({ t, wall: event.wall });
+    if (state.frames.length > 2000) state.frames.splice(0, 1000);
+  } else if (topic === "metrics") state.lastMetrics = data;
   else if (topic === "cv.track") state.lastTrack = data;
 }
 
@@ -91,16 +109,9 @@ function onUart(t, msg) {
   row.times.push(t);
   if (row.times.length > 4000) row.times.splice(0, 2000);
   row.fields = msg.fields;
-
-  if (msg.type === "ODOMETRY" && t - state.lastOdomPlot >= 0.02) {
-    plots.yaw.push(0, t, wrapDeg(msg.fields.yaw * DEG));
-    state.lastOdomPlot = t;
-  } else if (msg.type === "TURRET_AIM_DATA") {
-    const hasTarget = !(msg.fields.yaw === 0 && msg.fields.pitch === 0); // (0, 0) means no target
-    plots.yaw.push(1, t, hasTarget ? wrapDeg(msg.fields.yaw * DEG) : null);
-    state.lastAim = hasTarget ? msg.fields : null;
+  if (msg.type === "TURRET_AIM_DATA") {
+    state.lastAim = msg.fields.yaw === 0 && msg.fields.pitch === 0 ? null : msg.fields; // (0, 0): no target
   }
-
   if (!logFilters.has(msg.type)) {
     logFilters.set(msg.type, !LOG_OFF_BY_DEFAULT.has(msg.type));
     renderLogFilters();
@@ -109,56 +120,156 @@ function onUart(t, msg) {
   if (state.log.length > LOG_KEEP * 2) state.log.splice(0, state.log.length - LOG_KEEP);
 }
 
-function onFrame(t, frame, wall) {
-  state.lastFrame = frame;
-  state.frames.push({ t, wall });
-  if (state.frames.length > 2000) state.frames.splice(0, 1000);
-  plots.latency.push(0, t, frame.arrival_ms);
-  plots.latency.push(1, t, frame.processing_ms);
-  plots.latency.push(2, t, frame.aim_ms);
+// --- tabs and graphs -------------------------------------------------------------------------
+
+function renderTabs() {
+  const nav = $("tabs");
+  nav.innerHTML = "";
+  for (const tab of layout.tabs) {
+    const active = tab.id === layout.data.active;
+    const button = document.createElement("button");
+    button.className = `tab${active ? " active" : ""}`;
+    button.textContent = tab.name;
+    button.title = active ? "Double-click to rename" : "";
+    button.onclick = () => {
+      if (!active) {
+        layout.setActive(tab.id);
+        renderTabs();
+        buildTab();
+      }
+    };
+    button.ondblclick = () => renameTab(tab);
+    nav.append(button);
+    if (active && !tab.builtin) {
+      const remove = document.createElement("button");
+      remove.className = "tab-tool";
+      remove.title = `Delete tab "${tab.name}"`;
+      remove.textContent = "✕";
+      remove.onclick = () => {
+        if (!confirm(`Delete the tab "${tab.name}" and its graphs?`)) return;
+        layout.removeTab(tab.id);
+        renderTabs();
+        buildTab();
+        graphsChanged();
+      };
+      nav.append(remove);
+    }
+  }
+  const add = document.createElement("button");
+  add.className = "tab add-tab";
+  add.textContent = "+ New tab";
+  add.onclick = () => {
+    layout.addTab();
+    renderTabs();
+    buildTab();
+  };
+  nav.append(add);
 }
 
-function onTruth(t, truth) {
-  state.lastTruth = truth;
-  const target = truth.targets.find((tg) => tg.name === state.tracked) || truth.targets[0];
-  if (target) plots.yaw.push(2, t, wrapDeg(target.bearing * DEG));
+function renameTab(tab) {
+  const name = prompt("Tab name", tab.name);
+  if (name && name.trim()) {
+    tab.name = name.trim();
+    layout.save();
+    renderTabs();
+  }
 }
 
-function onMetrics(t, m) {
-  state.lastMetrics = m;
-  plots.plates.push(0, t, m.visible);
-  plots.plates.push(1, t, m.detected);
-  const f = m.filter;
-  if (f) state.tracked = f.target;
-  plots.spin.push(0, t, f ? f.true_omega : null);
-  plots.spin.push(1, t, f ? f.omega : null);
-  plots.center.push(0, t, f ? f.center_xy_m * 100 : null);
-  plots.center.push(1, t, f ? f.center_z_m * 100 : null);
-  plots.radius.push(0, t, f ? f.radius_m * 100 : null);
-  plots.orient.push(0, t, f ? f.orientation_rad * DEG : null);
+function buildTab() {
+  const tab = layout.active;
+  document.body.classList.toggle("custom-tab", !tab.builtin);
+  const slot = $("graphs");
+  slot.innerHTML = "";
+  graphViews = tab.graphs.map((graph) => {
+    const gv = new GraphView(graph, tab, app);
+    slot.append(gv.el);
+    return gv;
+  });
+  requestDraw();
 }
 
-// --- rendering ----------------------------------------------------------------------------
+function removeGraph(gv) {
+  layout.removeGraph(gv.tab, gv.graph);
+  buildTab();
+  graphsChanged();
+}
+
+$("add-graph").onclick = () => {
+  const graph = layout.addGraph(layout.active);
+  buildTab();
+  const gv = graphViews.find((v) => v.graph === graph);
+  gv.toggleEditor();
+  gv.el.scrollIntoView({ block: "nearest", behavior: "smooth" });
+  gv.el.querySelector(".sig-add input").focus();
+};
+
+function graphsChanged() {
+  updateSubscription();
+  requestDraw();
+}
+
+// Stream every signal any tab graphs (so switching tabs is instant), and fetch what came before.
+function updateSubscription() {
+  if (!ws || ws.readyState !== WebSocket.OPEN) return;
+  const names = [...new Set(layout.allGraphs().flatMap((g) => g.signals.flatMap((s) => hub.expand(s.name))))].sort();
+  const key = names.join("|");
+  if (key === subscribedKey) return;
+  const added = names.filter((n) => !subscribed.has(n));
+  subscribedKey = key;
+  subscribed = new Set(names);
+  ws.send(JSON.stringify({ kind: "subscribe", signals: names }));
+  if (added.length && state.tNow > 0) {
+    hub.backfill(added, Math.max(0, state.tNow - hub.keepS), state.tNow + 1).then(requestDraw).catch(() => {});
+  }
+}
+
+// --- drawing -----------------------------------------------------------------------------------
+
+let drawQueued = false;
+function requestDraw() {
+  if (drawQueued) return;
+  drawQueued = true;
+  requestAnimationFrame(() => {
+    drawQueued = false;
+    drawGraphs();
+  });
+}
+
+function drawGraphs() {
+  const [t0, t1] = view.range();
+  // Live with a window the buffers hold: draw them. Otherwise ask the server for the range (a long
+  // live window is refetched every two seconds).
+  const fromBuffers = view.live && view.windowS <= hub.keepS;
+  const key = view.live ? `live:${view.windowS}:${Math.floor(state.tNow / 2)}` : `${t0.toFixed(4)}:${t1.toFixed(4)}`;
+  for (const gv of graphViews) {
+    if (!fromBuffers) gv.ensureFetched(t0, t1, key);
+    gv.draw(t0, t1, fromBuffers);
+  }
+}
 
 function render() {
   renderHeader();
-  if (paused) return;
-  for (const plot of Object.values(plots)) plot.draw(state.tNow, windowS);
-  renderTraffic("mcb_to_cv");
-  renderTraffic("cv_to_mcb");
-  renderTracking();
-  renderLog();
+  if (hub.version !== catalogVersion) {
+    catalogVersion = hub.version;
+    $("signal-list").innerHTML = hub.names.map((n) => `<option value="${n}"></option>`).join("");
+  }
+  if (layout.active && layout.active.builtin) {
+    renderTraffic("mcb_to_cv");
+    renderTraffic("cv_to_mcb");
+    renderTracking();
+    renderLog();
+  }
+  drawGraphs();
 }
 
 function renderHeader() {
-  $("s-time").textContent = state.t0 === null ? "–" : `${state.tNow.toFixed(1)} s`;
+  $("s-time").textContent = `${state.tNow.toFixed(1)} s`;
   const frames = state.frames;
   const recent = frames.filter((f) => f.t > state.tNow - 1);
-  $("s-fps").textContent = recent.length ? `${recent.length} fps` : "–";
-  // Real-time factor: sim seconds per wall second over the last couple of wall seconds.
+  $("s-fps").textContent = recent.length && !state.run?.replay ? `${recent.length} fps` : "–";
   const lastWall = frames.length ? frames[frames.length - 1].wall : 0;
   const lately = frames.filter((f) => f.wall > lastWall - 2);
-  if (lately.length > 2) {
+  if (lately.length > 2 && !state.run?.replay) {
     const a = lately[0], b = lately[lately.length - 1];
     $("s-rtf").textContent = b.wall > a.wall ? `×${((b.t - a.t) / (b.wall - a.wall)).toFixed(2)}` : "–";
   } else {
@@ -176,32 +287,29 @@ function renderTraffic(dir) {
     body.innerHTML = `<tr><td colspan="4" class="empty">nothing yet</td></tr>`;
     return;
   }
-  const rows = [...table.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([type, row]) => {
+  body.innerHTML = [...table.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([type, row]) => {
     const rate = row.times.filter((t) => t > state.tNow - 1).length;
     return `<tr><td>${type}</td><td class="num">${rate} Hz</td><td class="num">${row.count}</td>` +
       `<td class="fields">${escapeHtml(formatFields(row.fields))}</td></tr>`;
-  });
-  body.innerHTML = rows.join("");
+  }).join("");
 }
 
 function renderTracking() {
   const items = [];
   const m = state.lastMetrics, f = m && m.filter, track = state.lastTrack, aim = state.lastAim;
-  if (state.run) items.push(["enemies", state.run.targets.map((tg) => `${tg.name} (${tg.number})`).join(", ")]);
+  if (state.run && state.run.targets) items.push(["enemies", state.run.targets.map((tg) => `${tg.name} (${tg.number})`).join(", ")]);
   if (f) {
     items.push(["tracking", f.target]);
     items.push(["spin", `${f.omega.toFixed(2)} rad/s  (true ${f.true_omega.toFixed(2)})`]);
     items.push(["radius", `${f.radius.toFixed(3)} m  (true ${f.true_radius.toFixed(3)})`]);
     items.push(["center off by", `${(f.center_xy_m * 100).toFixed(1)} cm`]);
     items.push(["orientation off by", `${(f.orientation_rad * DEG).toFixed(1)}°`]);
-  } else if (track) {
-    items.push(["tracking", track.pf_alive ? "yes" : "no"]);
   } else {
-    items.push(["tracking", "no"]);
+    items.push(["tracking", track && track.pf_alive ? "yes" : "no"]);
   }
   if (m) items.push(["plates", `${m.detected} detected of ${m.visible} visible`]);
   if (aim) items.push(["aim", `yaw ${(aim.yaw * DEG).toFixed(1)}°  pitch ${(aim.pitch * DEG).toFixed(1)}°  ${aim.distance.toFixed(2)} m  id ${aim.target_id}`]);
-  if (track && track.pipeline_delay_s != null) items.push(["pipeline delay", `${(track.pipeline_delay_s * 1000).toFixed(1)} ms`]);
+  if (track && track.pipeline_delay_s != null) items.push(["lead (delay + fire latency)", `${(track.pipeline_delay_s * 1000).toFixed(1)} ms`]);
   $("tracking").innerHTML = items.map(([k, v]) => `<dt>${k}</dt><dd>${escapeHtml(v)}</dd>`).join("");
 }
 
@@ -227,8 +335,7 @@ function renderLog() {
     const { t, msg } = state.log[i];
     if (!logFilters.get(msg.type)) continue;
     const toCv = msg.dir === "mcb_to_cv";
-    const arrow = toCv ? "MCB → CV" : "CV → MCB";
-    lines.push(`<span class="${toCv ? "to-cv" : "to-mcb"}">${t.toFixed(3).padStart(9)}  ${arrow}  ` +
+    lines.push(`<span class="${toCv ? "to-cv" : "to-mcb"}">${t.toFixed(3).padStart(9)}  ${toCv ? "MCB → CV" : "CV → MCB"}  ` +
       `${msg.type.padEnd(16)}</span>${escapeHtml(formatFields(msg.fields))}`);
   }
   box.innerHTML = lines.reverse().join("\n") || `<span class="empty">no messages</span>`;
@@ -237,15 +344,7 @@ function renderLog() {
 
 function formatFields(fields) {
   if (!fields) return "";
-  return Object.entries(fields).map(([k, v]) => `${k} ${typeof v === "number" ? formatNumber(v) : v}`).join("  ");
-}
-
-function formatNumber(v) {
-  return Number.isInteger(v) ? String(v) : v.toFixed(3);
-}
-
-function wrapDeg(v) {
-  return ((((v + 180) % 360) + 360) % 360) - 180;
+  return Object.entries(fields).map(([k, v]) => `${k} ${typeof v === "number" ? (Number.isInteger(v) ? v : v.toFixed(3)) : v}`).join("  ");
 }
 
 function escapeHtml(s) {
@@ -258,15 +357,84 @@ function setConnection(kind, text) {
   pill.textContent = text;
 }
 
-// --- connection ---------------------------------------------------------------------------
+// --- time controls -----------------------------------------------------------------------------
+
+function parseDuration(text) {
+  const m = /^\s*(\d+(?:\.\d+)?|\.\d+)\s*(ms|s|sec|m|min|h)?\s*$/i.exec(text);
+  if (!m) return null;
+  const unit = (m[2] || "s").toLowerCase();
+  const seconds = Number(m[1]) * { ms: 0.001, s: 1, sec: 1, m: 60, min: 60, h: 3600 }[unit];
+  return seconds > 0 ? seconds : null;
+}
+
+function formatDuration(s) {
+  if (s >= 3600 && s % 3600 === 0) return `${s / 3600} h`;
+  if (s >= 120 && s % 60 === 0) return `${s / 60} min`;
+  return `${+s.toFixed(3)} s`;
+}
+
+function updateTimeControls() {
+  const button = $("live-btn");
+  button.textContent = view.live ? "● Live" : "❚❚ Paused (back to live)";
+  button.className = view.live ? "live" : "paused";
+  $("range-box").hidden = view.live;
+  const from = $("range-from"), to = $("range-to");
+  if (!view.live && document.activeElement !== from && document.activeElement !== to) {
+    from.value = view.t0.toFixed(3);
+    to.value = view.t1.toFixed(3);
+  }
+}
+
+$("live-btn").onclick = () => (view.live ? view.pause() : view.goLive());
+$("window-input").onchange = (e) => {
+  const seconds = parseDuration(e.target.value);
+  if (seconds) {
+    view.windowS = seconds;
+    if (!view.live) view.set(view.t1 - seconds, view.t1);
+    requestDraw();
+  }
+  e.target.value = formatDuration(view.windowS);
+};
+const setRangeFromInputs = () => view.set(Number($("range-from").value), Number($("range-to").value));
+$("range-from").onchange = setRangeFromInputs;
+$("range-to").onchange = setRangeFromInputs;
+
+// --- connection --------------------------------------------------------------------------------
+
+async function onSnapshot(packet) {
+  resetState();
+  const run = packet.events.find((e) => e.topic === "run");
+  hub.reset(packet.signals || [], run ? run.t : packet.events.length ? packet.events[0].t : 0);
+  for (const event of packet.events) ingest(event);
+  try {
+    const catalog = await (await fetch("/api/catalog")).json();
+    hub.addNames(catalog.signals || []);
+    if (catalog.span) state.tNow = Math.max(state.tNow, catalog.span[1] - hub.offset);
+  } catch (e) {
+    console.warn("catalog", e);
+  }
+  subscribed = new Set();
+  subscribedKey = "";
+  updateSubscription();
+  if (state.run && state.run.replay) {
+    setConnection("replay", "replay");
+    view.set(0, Math.max(state.tNow, 1)); // a recorded run: show all of it, paused
+  }
+  requestDraw();
+}
 
 function connect() {
-  const ws = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/ws`);
+  ws = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/ws`);
   ws.onopen = () => setConnection("live", "live");
   ws.onmessage = (message) => {
     const packet = JSON.parse(message.data);
-    if (packet.kind === "snapshot") reset();
+    if (packet.kind === "snapshot") {
+      onSnapshot(packet);
+      return;
+    }
     for (const event of packet.events) ingest(event);
+    if (packet.series) hub.append(packet.series);
+    if (packet.new_signals && packet.new_signals.length && hub.addNames(packet.new_signals)) updateSubscription();
   };
   ws.onclose = () => {
     if (!state.ended) setConnection("down", "waiting for a run…");
@@ -274,13 +442,14 @@ function connect() {
   };
 }
 
-$("pause").addEventListener("click", (e) => {
-  paused = !paused;
-  e.target.setAttribute("aria-pressed", String(paused));
-  e.target.textContent = paused ? "Resume" : "Pause";
-});
-$("window").addEventListener("change", (e) => (windowS = Number(e.target.value)));
+async function start() {
+  resetState();
+  await layout.load();
+  renderTabs();
+  buildTab();
+  updateTimeControls();
+  connect();
+  setInterval(render, 150);
+}
 
-reset();
-connect();
-setInterval(render, 150);
+start();

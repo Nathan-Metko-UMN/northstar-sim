@@ -109,12 +109,34 @@ machine or another device on the network (a phone works):
 .venv\Scripts\nssim drive --dashboard       # prints http://localhost:8050 and http://<this machine>:8050
 ```
 
-It shows the serial traffic both ways (rate and latest values of every message type, and a
-filterable log), Northstar-CV's filter against the truth (spin, radius, center, orientation), plates
-visible vs detected, the turret's yaw against the CV's aim and the robot's true bearing, and the
-latency from capture to the frame arriving and to its aim reaching the MCB. A browser that connects
-mid-run gets the last two minutes; one left open picks up the next run by itself. Everything also
-lands in the run directory as before, now including `uart.jsonl` (every serial message, decoded).
+The Overview tab shows the serial traffic both ways (rate and latest values of every message type,
+and a filterable log), Northstar-CV's filter against the truth (spin, radius, center, orientation),
+plates visible vs detected, the turret's yaw against the CV's aim and the robot's true bearing, and
+the latency from capture to the frame arriving and to its aim reaching the MCB.
+
+**Your own tabs and graphs.** `+ New tab` makes a tab (double-click its name to rename it); `+ Add
+graph` puts a graph in it. A graph plots any numbers the run produces: every field of every serial
+message (`uart.mcb_to_cv.ODOMETRY.yaw`), everything Northstar-CV reports (`cv.track.state.omega`,
+`cv.track.ballistics.time_of_flight`), the truth (`truth.targets.infantry.center.x`), the errors
+(`metrics.filter.radius_m`) and frame timing (`frame.processing_ms`). Type in the signal box to
+search; `*` matches any part (`truth.targets.*.bearing` is every robot's). Each signal can be
+converted (rad → °, m → cm, s → ms), and the y axis is automatic (optionally keeping 0 in view) or a
+fixed min/max. Tabs and graphs are saved on the sim machine (`.nssim/dashboard_layout.json`), so every
+browser sees the same ones.
+
+**Time.** All graphs share one time range. Live shows the last `window` (type any length: `45s`,
+`10m`). Pause holds the view, and from/to set any range. Drag across a graph to zoom in, Shift+drag
+to pan, Ctrl+scroll (or pinch) to zoom around the pointer, double-click to go back to live; hover
+to read values. Zoomed and long ranges come from the server at full detail, so zooming in shows
+every sample.
+
+A browser that connects mid-run gets the whole run so far; one left open picks up the next run by
+itself. Everything also lands in the run directory as before, now including `uart.jsonl` (every
+serial message, decoded). To look through a run afterwards (the live dashboard stops with the run):
+
+```powershell
+.venv\Scripts\nssim dashboard runs\<run>     # serves it until Ctrl+C
+```
 
 Other devices need the port open like the Jetson's: allow TCP 8050 in the firewall (see below),
 or pick another with `--dashboard-port`. It is view-only and has no login, so keep it to networks

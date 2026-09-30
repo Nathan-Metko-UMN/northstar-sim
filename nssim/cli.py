@@ -116,22 +116,57 @@ def _execute(cfg, args, live: str | None, **live_options) -> None:
 
 
 def _start_dashboard(port: int, runner):
-    from nssim.cv_launcher import local_address_towards
     from nssim.dashboard import DashboardServer
 
-    server = DashboardServer(port=port)
+    server = _serve(DashboardServer(port=port), "--dashboard-port")
+    runner.bus.subscribe(server)
+    return server
+
+
+def _serve(server, port_option: str):
+    """Start a dashboard server and say where to find it."""
+    from nssim.cv_launcher import local_address_towards
+
     try:
         server.start()
     except OSError as e:
-        sys.exit(f"can't serve the dashboard on port {port} ({e.strerror}); pick another with --dashboard-port")
-    runner.bus.subscribe(server)
-    urls = [f"http://localhost:{port}"]
+        sys.exit(f"can't serve the dashboard on port {server.port} ({e.strerror}); pick another with {port_option}")
+    urls = [f"http://localhost:{server.port}"]
     try:
-        urls.append(f"http://{local_address_towards('8.8.8.8')}:{port}  (other devices on your network)")
+        urls.append(f"http://{local_address_towards('8.8.8.8')}:{server.port}  (other devices on your network)")
     except OSError:
         pass  # no network: this machine only
     print("[nssim] dashboard: " + "\n                   ".join(urls), flush=True)
     return server
+
+
+def cmd_dashboard(args) -> None:
+    """Serve a recorded run in the dashboard until Ctrl+C."""
+    import time
+
+    from nssim.dashboard import DashboardServer
+    from nssim.dashboard.replay import run_events
+    from nssim.sim.robot_constants import load_robot_constants
+
+    run_dir = Path(args.run_dir)
+    if not (run_dir / "frames.jsonl").is_file():
+        sys.exit(f"{run_dir} doesn't look like a run (no frames.jsonl)")
+    try:
+        yaw_offset = load_robot_constants(paths.cv_dir(args.cv_dir)).yaw_offset
+    except (OSError, ValueError):
+        yaw_offset = (0.0, 0.0, 0.0)  # only moves the robots' bearing a little
+    print(f"[nssim] loading {run_dir}", flush=True)
+    server = DashboardServer(port=args.port)
+    server.load(run_events(run_dir, yaw_offset))
+    _serve(server, "--port")
+    print("[nssim] serving until Ctrl+C", flush=True)
+    try:
+        while True:
+            time.sleep(1)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        server.stop()
 
 
 def _launcher(args, cv_dir: Path):
@@ -239,6 +274,12 @@ def main(argv=None) -> None:
     dr.add_argument("--turret", choices=["hold", "ideal", "second_order"])
     dr.add_argument("--no-cv-window", action="store_true", help="skip the window with the CV's camera image")
     dr.set_defaults(func=cmd_drive)
+
+    db = sub.add_parser("dashboard", help="look through a recorded run in the dashboard")
+    db.add_argument("run_dir")
+    db.add_argument("--port", type=int, default=8050)
+    db.add_argument("--cv-dir")
+    db.set_defaults(func=cmd_dashboard)
 
     ev = sub.add_parser("eval", help="evaluate a run directory")
     ev.add_argument("run_dir")

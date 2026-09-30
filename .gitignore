@@ -14,3 +14,4 @@ runs/
 
 # Build output of the C++ conformance helpers
 tests/cpp/build/
+.nssim/

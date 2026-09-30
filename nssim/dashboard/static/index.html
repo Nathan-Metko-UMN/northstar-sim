@@ -17,24 +17,27 @@
     <div><span class="k">CV</span><span class="v" id="s-cv">–</span></div>
     <div><span class="k">frame → aim</span><span class="v" id="s-aim">–</span></div>
   </div>
-  <div class="controls">
-    <label for="window">window</label>
-    <select id="window">
-      <option value="10">10 s</option>
-      <option value="30" selected>30 s</option>
-      <option value="120">2 min</option>
-    </select>
-    <button id="pause" aria-pressed="false">Pause</button>
+  <div class="time-controls">
+    <button id="live-btn" class="live" title="Follow the newest data, or hold the view">● Live</button>
+    <label title="How much time the graphs show when live, e.g. 30s, 2m, 1.5h">window
+      <input id="window-input" value="30 s" size="6" spellcheck="false"></label>
+    <span id="range-box" hidden>
+      <label>from <input id="range-from" type="number" step="any"></label>
+      <label>to <input id="range-to" type="number" step="any"></label> s
+    </span>
   </div>
 </header>
 
-<main>
-  <section class="panel">
+<nav id="tabs" class="tabs"></nav>
+<div class="hint">Drag across a graph to zoom in · Shift+drag to pan · Ctrl+scroll or pinch to zoom · double-click for live</div>
+
+<main id="grid">
+  <section class="panel builtin">
     <h2>Tracking</h2>
     <dl class="values" id="tracking"></dl>
   </section>
 
-  <section class="panel">
+  <section class="panel builtin">
     <h2>UART · MCB → CV</h2>
     <table>
       <thead><tr><th>message</th><th class="num">rate</th><th class="num">count</th><th>latest</th></tr></thead>
@@ -42,7 +45,7 @@
     </table>
   </section>
 
-  <section class="panel">
+  <section class="panel builtin">
     <h2>UART · CV → MCB</h2>
     <table>
       <thead><tr><th>message</th><th class="num">rate</th><th class="num">count</th><th>latest</th></tr></thead>
@@ -50,48 +53,21 @@
     </table>
   </section>
 
-  <section class="panel">
-    <h2>Turret yaw</h2>
-    <canvas class="plot" id="p-yaw"></canvas>
-    <div class="hint">What the MCB reports, what Northstar-CV asks for, and where the tracked robot really is.</div>
-  </section>
+  <div id="graphs"></div>
+  <button id="add-graph" class="panel add">+ Add graph</button>
 
-  <section class="panel">
-    <h2>Spin rate</h2>
-    <canvas class="plot" id="p-spin"></canvas>
-  </section>
-
-  <section class="panel">
-    <h2>Filter center error</h2>
-    <canvas class="plot" id="p-center"></canvas>
-  </section>
-
-  <section class="panel">
-    <h2>Filter radius and orientation error</h2>
-    <canvas class="plot" id="p-radius"></canvas>
-    <canvas class="plot" id="p-orient"></canvas>
-  </section>
-
-  <section class="panel">
-    <h2>Plates per frame</h2>
-    <canvas class="plot" id="p-plates"></canvas>
-    <div class="hint">Visible: facing the camera, unblocked, in the image and less than 70° edge-on.</div>
-  </section>
-
-  <section class="panel">
-    <h2>Latency</h2>
-    <canvas class="plot" id="p-latency"></canvas>
-    <div class="hint">From capture: the frame arriving at Northstar-CV, and its aim reaching the MCB.</div>
-  </section>
-
-  <section class="panel wide">
+  <section class="panel wide builtin">
     <h2>Messages</h2>
     <div class="log-controls" id="log-filters"></div>
     <div id="log"></div>
   </section>
 </main>
 
+<datalist id="signal-list"></datalist>
+
 <script src="/static/plot.js"></script>
+<script src="/static/signals.js"></script>
+<script src="/static/layout.js"></script>
 <script src="/static/app.js"></script>
 </body>
 </html>

@@ -95,6 +95,40 @@ class _PendingFrame:
     develop_ms: dict = field(default_factory=dict)  # wall time spent making the image
 
 
+def frame_events(record: dict, yaw_offset, det: dict | None, track: dict | None) -> list[tuple[str, float, dict]]:
+    """The bus events for one delivered frame (a frames.jsonl record): its timing, the truth at its
+    capture, and the CV's errors on it (``det`` / ``track``: its telemetry for this frame, if any).
+    Shared by live runs and replays, so both show the same."""
+    t = record["capture_us"] / 1e6
+    aim_us = record.get("aim_us")
+    timing = {
+        "seq": record["seq"],
+        "arrival_ms": (record["arrival_us"] - record["capture_us"]) / 1e3,
+        "processing_ms": record["processing_us"] / 1e3,
+        "aim_ms": None if aim_us is None else (aim_us - record["capture_us"]) / 1e3,  # capture -> aim at the MCB
+        "image_bytes": record.get("image_bytes"),
+        "wall_ms": record.get("wall_ms", {}),
+    }
+    gt = record["gt"]
+    base = np.asarray(gt["base_world"], float)
+    pivot = base + np.asarray(yaw_offset, float)
+    targets = []
+    for target in gt["targets"]:
+        center = np.asarray(target["center_base"], float) + base
+        targets.append({
+            "name": target["name"],
+            "number": target["number"],
+            "center": center,
+            "velocity": target["velocity"],
+            "spin": target["spin"],
+            "omega": target["omega"],
+            "bearing": float(np.arctan2(center[1] - pivot[1], center[0] - pivot[0])),
+            "distance": float(np.linalg.norm(center[:2] - pivot[:2])),
+        })
+    truth = {"seq": record["seq"], "turret": gt["turret"], "base": base, "targets": targets}
+    return [("frame", t, timing), ("truth", t, truth), ("metrics", t, frame_errors(record, det, track))]
+
+
 def _json_default(obj):
     if isinstance(obj, np.ndarray):
         return obj.tolist()
@@ -370,6 +404,7 @@ class Runner:
                     "aim": (wall_aim - wall_ack) * 1e3,
                 },
                 "aim_received": self._aims_received > aims_before,
+                "aim_us": aim_us,  # when this frame's aim reached the MCB
                 "gt": frame.gt,
         }
         self._log("frames", record)
@@ -377,39 +412,12 @@ class Runner:
             self._publish_frame(frame, record, aim_us)
 
     def _publish_frame(self, frame: _PendingFrame, record: dict, aim_us: int | None) -> None:
-        """A delivered frame's timing, the truth at its capture, and the CV's errors on it."""
-        t = frame.capture_us / 1e6
-        self.bus.publish("frame", t, {
-            "seq": frame.seq,
-            "arrival_ms": (frame.arrival_us - frame.capture_us) / 1e3,
-            "processing_ms": record["processing_us"] / 1e3,
-            "aim_ms": None if aim_us is None else (aim_us - frame.capture_us) / 1e3,  # capture -> aim at the MCB
-            "image_bytes": record["image_bytes"],
-            "wall_ms": record["wall_ms"],
-        })
-        gt = frame.gt
-        base = np.asarray(gt["base_world"], float)
-        pivot = base + self.shooter.constants.yaw_offset
-        targets = []
-        for target in gt["targets"]:
-            center = np.asarray(target["center_base"], float) + base
-            targets.append({
-                "name": target["name"],
-                "number": target["number"],
-                "center": center,
-                "velocity": target["velocity"],
-                "spin": target["spin"],
-                "omega": target["omega"],
-                "bearing": float(np.arctan2(center[1] - pivot[1], center[0] - pivot[0])),
-                "distance": float(np.linalg.norm(center[:2] - pivot[:2])),
-            })
-        self.bus.publish("truth", t, {"seq": frame.seq, "turret": gt["turret"], "base": base, "targets": targets})
-
         def this_frame(kind: str) -> dict | None:
             msg = self.latest.get(kind)
             return msg if msg is not None and msg.get("seq") == frame.seq else None
 
-        self.bus.publish("metrics", t, frame_errors(record, this_frame("det"), this_frame("track")))
+        for topic, t, data in frame_events(record, self.shooter.constants.yaw_offset, this_frame("det"), this_frame("track")):
+            self.bus.publish(topic, t, data)
 
     def _publish_run(self) -> None:
         cfg = self.config
