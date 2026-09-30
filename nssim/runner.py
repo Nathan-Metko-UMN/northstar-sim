@@ -231,10 +231,9 @@ class Runner:
         cam_pose = self.shooter.camera(self.turret.yaw, self.turret.pitch)
         base = self.shooter.base_xyz
         targets = []
-        states = {}
+        states = {name: target.state(t) for name, target in self.targets.items()}
         for name, target in self.targets.items():
-            state = target.state(t)
-            states[name] = state
+            state = states[name]
             spec = target.spec
             bars = self.assets.plate_geometry(spec.panel).bars
             plates = []
@@ -247,6 +246,7 @@ class Runner:
                         "center_base": plate.p - base,
                         "normal": plate.R[:, 0],
                         "facing": facing,
+                        "occluded": self._occluded(cam_pose.p, plate.p, name, states),
                         "corners_px": project(cam, cam_pose, corners),
                     }
                 )
@@ -273,6 +273,24 @@ class Runner:
             "targets": targets,
         }
         return gt, cam_pose, states
+
+    def _occluded(self, eye: np.ndarray, point: np.ndarray, owner: str, states: dict) -> bool:
+        """Does another robot stand in the line of sight to a plate? (Robots as vertical cylinders
+        the size of their plate ring; everything is at about the same height.)"""
+        sight = point[:2] - eye[:2]
+        length = float(np.linalg.norm(sight))
+        if length < 1e-6:
+            return False
+        sight /= length
+        for name, state in states.items():
+            if name == owner:
+                continue
+            spec = self.targets[name].spec
+            rel = state.center[:2] - eye[:2]
+            along = float(rel @ sight)
+            if 0.0 < along < length and abs(rel[0] * sight[1] - rel[1] * sight[0]) < (spec.radius_high + spec.radius_low) / 2:
+                return True
+        return False
 
     def _deliver(self, frame: _PendingFrame) -> None:
         self.link.flush(frame.arrival_us)

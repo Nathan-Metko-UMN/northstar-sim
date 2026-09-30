@@ -60,6 +60,7 @@ the evaluation. Options: `--duration`, `--fps`, `--turret hold|ideal|second_orde
 
 ```powershell
 .venv\Scripts\nssim drive                    # drive the enemy yourself while Northstar-CV tracks it
+.venv\Scripts\nssim drive --enemies 3        # infantry, hero and sentry
 .venv\Scripts\nssim run spinning --view      # watch any scenario live
 ```
 
@@ -70,17 +71,25 @@ Northstar-CV sent (yellow), and its particle filter: the four plates and center 
 (magenta) against the enemy's true center (green), plus its ballistic aim point (yellow). The panel
 has live numbers: filter spin and radius against the truth, and the real-time factor.
 
-Keys (with the viewer window focused):
+Keys (with the viewer window focused) are the TR simulator's, so the same fingers work in both:
+its secondary robot, the one it uses for aiming practice, is our enemy, and its primary robot is
+ours. Like TR, WASD is left to the viewer's camera.
 
 | key | |
 |---|---|
-| arrows | drive the enemy, relative to the view |
-| Q / E | enemy spin slower / faster (1 rad/s steps) |
-| space | stop / restart the spin |
-| I J K L | drive our robot |
-| R | reset positions |
-| 1 / 2 | free view / ride on our turret camera |
+| I / K, J / L | enemy forward / back, left / right (field axes) |
+| 5 | enemy stops spinning |
+| 4 3 2 1 | enemy spins counterclockwise at 25 / 50 / 75 / 100 % |
+| 6 7 8 9 | enemy spins clockwise at 25 / 50 / 75 / 100 % |
+| Shift / Ctrl + the enemy keys | the 2nd / 3rd enemy (`--enemies 2` or `3`: a hero, then a sentry) |
+| T / G, F / H | our robot forward / back, left / right (relative to where the turret points) |
+| R / Y | turn our chassis |
+| V | ride on our turret camera / back to the free view (not in TR) |
+| 0 | reset positions (not in TR) |
 | mouse, W A S D | move the view (right-drag turns, scroll zooms) |
+
+Speeds are TR's too: 0.6 m/s while a move key is held (`--speed`) and spin presets up to
+4.5 rad/s (`--max-spin`).
 
 The run is paced to the wall clock. With Northstar-CV in Docker Desktop each frame costs about
 20 ms of wall time, so `drive` defaults to a 50 fps camera, which runs close to real time;
@@ -107,6 +116,29 @@ push there as usual, then record the new pin here with `git add external/Northst
 
 A clone elsewhere can only fetch a pinned commit that has been pushed, so push Northstar-CV's
 `sim-harness` before pushing a new pin.
+
+## How this relates to TR's simulator
+
+The harness doesn't run TR's simulator and doesn't change it: `external/TR-Simulation-ARCTIC-2026`
+is TR's repository exactly as published, used for its field and armor-panel models (and its
+keyboard layout). The simulation itself is in this repo: `nssim/sim` builds a SAPIEN scene from
+those models and moves the robots, `nssim/camera` models the camera and lens, `nssim/mcb` plays
+the MCB.
+
+TR's simulator is a ROS 2 node around ManiSkill physics that runs in real time and publishes a
+camera image. Testing auto-aim needed things it isn't built for:
+
+- lockstep with Northstar-CV: render a frame, hand it over, wait for the aim. That is what makes
+  166 fps possible on any machine and makes runs repeatable;
+- exact ground truth for every frame (plate corners in pixels, robot poses and spin), so errors
+  are measured rather than eyeballed;
+- the MCB's serial protocol and timing instead of ROS topics, so Northstar-CV runs unmodified apart
+  from its camera source;
+- no ROS, so it runs natively on Windows.
+
+It also adds what the detector needs to behave as it does on real footage: LED light bars that
+stay visible at an angle, lens blur and glare, the Bayer mosaic, and sticker digits at the size
+the number classifier expects (see NOTES.md).
 
 ## Paced mode
 

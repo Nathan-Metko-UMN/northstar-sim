@@ -5,9 +5,13 @@ the viewer (never in the CV's image):
 
 - our robot: chassis, barrel, where the turret points (red) and the aim Northstar-CV sent (yellow)
 - Northstar-CV's particle filter: its four plates and center (magenta) and its ballistic aim
-  point (yellow), next to the enemy's true center (green)
+  point (yellow), next to each enemy's true center (green)
 
 A second window shows the frame Northstar-CV received, with its detections.
+
+The keys are the TR simulator's (``util_nodes/keyboard_controls.py`` in TR-Simulation-ARCTIC-2026),
+so the same fingers work in both: its secondary robot (the target it uses for aiming practice) is
+our enemy, its primary robot is ours. Like TR, WASD is left to the viewer's camera.
 
 The run is paced to the wall clock. When Northstar-CV and the renderer can't keep up (a high camera
 frame rate, a slow machine) it runs in slow motion instead; the panel shows the real-time factor.
@@ -28,21 +32,23 @@ from nssim.camera import RGGB_TO_BGR
 from nssim.sim.geometry import mat_to_quat
 from nssim.sim.targets import DrivenMotion
 
+# TR's teleop constants (sim_node/constants.py).
+TR_TELEOP_SPEED = 0.6  # m/s while a move key is held
+TR_TELEOP_TURN = 1.0  # rad/s, our chassis (R / Y)
+TR_MAX_SPIN = 4.5  # rad/s; the number keys pick fractions of it
+SPIN_PRESETS = {"5": 0.0, "4": 0.25, "3": 0.5, "2": 0.75, "1": 1.0, "6": -0.25, "7": -0.5, "8": -0.75, "9": -1.0}
+
 CONTROLS = [
-    "arrows    drive the enemy (relative to the view)",
-    "Q / E     enemy spin slower / faster",
-    "space     stop / restart the spin",
-    "I J K L   drive our robot",
-    "R         reset positions",
-    "1 / 2     free view / ride on our camera",
+    "enemy     I / K forward / back, J / L left / right (field axes)",
+    "          5 stop spin, 4 3 2 1 = 25-100% CCW, 6 7 8 9 = 25-100% CW",
+    "          hold Shift / Ctrl for the 2nd / 3rd enemy",
+    "our robot T / G forward / back, F / H left / right (turret heading)",
+    "          R / Y turn the chassis",
+    "V         ride on our turret camera / free view",
+    "0         reset positions",
     "mouse, W A S D   move the view",
     "(keys go to this window when it has focus)",
 ]
-
-ENEMY_SPEED = 2.0  # m/s at full stick
-BASE_SPEED = 1.5
-SPIN_STEP = 1.0  # rad/s per Q/E press
-FIRST_SPIN = 6.0  # what space starts if the enemy has never spun
 
 MAGENTA = (1.0, 0.2, 1.0, 1.0)
 YELLOW = (1.0, 0.85, 0.0, 1.0)
@@ -100,7 +106,7 @@ class _Panel(Plugin):
     def get_ui_windows(self):
         if self._window is None or len(self.lines) != self._count:
             self._count = len(self.lines)
-            self._window = R.UIWindow().Label("nssim").Pos(10, 460).Size(430, 22 * self._count + 40)
+            self._window = R.UIWindow().Label("nssim").Pos(10, 460).Size(470, 22 * self._count + 40)
             for i in range(self._count):
                 self._window.append(R.UIDisplayText().Bind(lambda i=i: self.lines[i] if i < len(self.lines) else ""))
         return [self._window]
@@ -112,10 +118,13 @@ class LiveSession:
     view_hz = 30.0
     cv_view_hz = 15.0
 
-    def __init__(self, runner, drive: bool = False, show_cv: bool = True):
+    def __init__(self, runner, drive: bool = False, show_cv: bool = True,
+                 speed: float = TR_TELEOP_SPEED, max_spin: float = TR_MAX_SPIN):
         self.runner = runner
         self.drive = drive
         self.show_cv = show_cv
+        self.speed = speed
+        self.max_spin = max_spin
         self.stop_requested = False
 
         self.viewer = Viewer(resolutions=(1600, 900))
@@ -128,17 +137,19 @@ class LiveSession:
         self.viewer.control_window.show_camera_linesets = False
         self.viewer.register_click_handler(lambda viewer, x, y: True)
 
-        self.enemy_name = next(iter(runner.targets))
-        self.enemy: DrivenMotion | None = None
+        self.names = list(runner.targets)
+        self.enemies: list[DrivenMotion] = []
         self.base: DrivenMotion | None = None
+        self.base_heading = 0.0  # our chassis (the turret is IMU-stabilized, so only the wireframe turns)
+        self._base_turn = 0.0
         if drive:
             lo, hi = runner.scene.floor_bounds
             bounds = (lo + 0.4, hi - 0.4)
-            target = runner.targets[self.enemy_name]
-            self.enemy = DrivenMotion(target.motion.center_xy(0.0), spin0=target.motion.spin(0.0), bounds=bounds)
-            target.motion = self.enemy
+            for target in runner.targets.values():
+                motion = DrivenMotion(target.motion.center_xy(0.0), spin0=target.motion.spin(0.0), bounds=bounds)
+                target.motion = motion
+                self.enemies.append(motion)
             self.base = DrivenMotion(runner.shooter.base_xyz[:2], bounds=bounds)
-        self._saved_omega = FIRST_SPIN
 
         self._make_wires()
         self._place_view()
@@ -155,8 +166,10 @@ class LiveSession:
     def tick(self, runner, t: float, dt: float) -> None:
         self._t = t
         if self.drive:
-            self.enemy.step(dt)
+            for enemy in self.enemies:
+                enemy.step(dt)
             self.base.step(dt)
+            self.base_heading += self._base_turn * dt
             runner.shooter.base_xyz[:2] = self.base.xy
             runner.base_velocity[:] = self.base.v
 
@@ -203,14 +216,17 @@ class LiveSession:
             "aim": _Wire(v, _SEGMENT, YELLOW),
             "pf_center": _Wire(v, _CUBE_EDGES, MAGENTA),
             "pf_target": _Wire(v, _CUBE_EDGES, YELLOW),
-            "true_center": _Wire(v, _CUBE_EDGES, GREEN),
         }
         self.pf_plates = [_Wire(v, _CUBE_EDGES, MAGENTA) for _ in range(4)]
+        self.true_centers = [_Wire(v, _CUBE_EDGES, GREEN) for _ in self.names]
+
+    def _all_wires(self) -> list[_Wire]:
+        return [*self.wires.values(), *self.pf_plates, *self.true_centers]
 
     def _place_view(self) -> None:
-        """Start behind and above our robot, looking past it at the enemy."""
+        """Start behind and above our robot, looking past it at the enemies."""
         ours = self.runner.shooter.base_xyz
-        enemy = self.runner.targets[self.enemy_name].state(0.0).center
+        enemy = np.mean([t.state(0.0).center for t in self.runner.targets.values()], axis=0)
         ahead = enemy[:2] - ours[:2]
         ahead /= max(np.linalg.norm(ahead), 1e-6)
         eye = np.array([*(ours[:2] - 2.2 * ahead + 1.2 * np.array([ahead[1], -ahead[0]])), ours[2] + 1.8])
@@ -225,30 +241,37 @@ class LiveSession:
         runner = self.runner
         states = {name: target.state(t) for name, target in runner.targets.items()}
         runner.scene.set_targets(states)
-        self._update_wires(states[self.enemy_name])
-        self.panel.lines = self._status(states[self.enemy_name]) + [""] + CONTROLS
+        tracked = self._tracked(states)
+        self._update_wires(states, tracked)
+        self.panel.lines = self._status(states, tracked) + [""] + CONTROLS
         if self._riding:
             # (SAPIEN's own "focus camera" doesn't follow in this version, so do it here.)
             eye = runner.shooter.camera(runner.turret.yaw, runner.turret.pitch)
             self.viewer.set_camera_pose(eye.to_sapien())
         self.viewer.render()
-        self._hide_wires()  # before the CV's camera renders again
+        for wire in self._all_wires():  # out of sight before the CV's camera renders again
+            wire.hide()
         if not self.viewer.closed:
             self._read_keys()
 
-    def _hide_wires(self) -> None:
-        for wire in [*self.wires.values(), *self.pf_plates]:
-            wire.hide()
+    def _tracked(self, states) -> str | None:
+        """The enemy the filter is on: the one whose true center is nearest its estimate."""
+        track = self.runner.latest.get("track")
+        if not (track and track.get("pf_alive") and "state" in track):
+            return None
+        estimate = np.asarray(track["state"]["center"][:2]) + self.runner.shooter.base_xyz[:2]
+        return min(states, key=lambda name: np.linalg.norm(states[name].center[:2] - estimate))
 
-    def _update_wires(self, enemy) -> None:
+    def _update_wires(self, states, tracked) -> None:
         runner = self.runner
         shooter = runner.shooter
         base = shooter.base_xyz
-        self.wires["chassis"].show(base + [0.0, 0.0, 0.12], _IDENTITY, [0.3, 0.25, 0.1])
+        self.wires["chassis"].show(base + [0.0, 0.0, 0.12], _yaw_quat(self.base_heading), [0.3, 0.25, 0.1])
 
         joint = shooter.pitch_joint(runner.turret.yaw, runner.turret.pitch)
         muzzle = shooter.muzzle(runner.turret.yaw, runner.turret.pitch)
-        ray = np.linalg.norm(enemy.center - muzzle.p) + 0.5
+        focus = states[tracked or self.names[0]].center
+        ray = np.linalg.norm(focus - muzzle.p) + 0.5
         q = mat_to_quat(joint.R)
         self.wires["barrel"].show(joint.p, q, [np.linalg.norm(muzzle.p - joint.p) + 0.05, 1, 1])
         self.wires["pointing"].show(muzzle.p, q, [ray, 1, 1])
@@ -256,12 +279,11 @@ class LiveSession:
         if aim.updated:
             commanded = shooter.muzzle(aim.aim.yaw, aim.aim.pitch)
             self.wires["aim"].show(commanded.p, mat_to_quat(commanded.R), [ray, 1, 1])
-        else:
-            self.wires["aim"].hide()
 
-        self.wires["true_center"].show(enemy.center, _IDENTITY, [0.03] * 3)
+        for wire, name in zip(self.true_centers, self.names):
+            wire.show(states[name].center, _IDENTITY, [0.03] * 3)
         track = runner.latest.get("track")
-        if track and track.get("pf_alive") and "state" in track:
+        if tracked is not None:
             state = track["state"]
             center = np.asarray(state["center"]) + base
             self.wires["pf_center"].show(center, _IDENTITY, [0.03] * 3)
@@ -271,33 +293,32 @@ class LiveSession:
             ballistics = track.get("ballistics", {})
             if ballistics.get("success"):
                 self.wires["pf_target"].show(np.asarray(ballistics["target"]) + base, _IDENTITY, [0.02] * 3)
-            else:
-                self.wires["pf_target"].hide()
-        else:
-            for wire in [self.wires["pf_center"], self.wires["pf_target"], *self.pf_plates]:
-                wire.hide()
 
-    def _status(self, enemy) -> list[str]:
+    def _status(self, states, tracked) -> list[str]:
         runner = self.runner
-        base = runner.shooter.base_xyz
-        lines = [
-            f"sim {self._t:7.2f} s    real time x{self._rtf:.2f}    camera {runner.config.fps:.0f} fps",
-            f"enemy  {np.linalg.norm(enemy.velocity):.1f} m/s   spin {enemy.omega:+.1f} rad/s"
-            + (f" (cmd {self.enemy.command_omega:+.0f})" if self.drive else ""),
-        ]
+        lines = [f"sim {self._t:7.2f} s    real time x{self._rtf:.2f}    camera {runner.config.fps:.0f} fps"]
+        for i, name in enumerate(self.names):
+            state = states[name]
+            keys = ("", "Shift+", "Ctrl+")[i] if i < 3 else ""
+            lines.append(
+                f"{keys + name:14s} {np.linalg.norm(state.velocity):.1f} m/s  spin {state.omega:+.1f} rad/s"
+                + ("   <- tracked" if name == tracked else "")
+            )
         if self.drive:
-            lines.append(f"ours   {np.linalg.norm(self.base.v):.1f} m/s")
+            lines.append(f"{'our robot':14s} {np.linalg.norm(self.base.v):.1f} m/s")
         det = runner.latest.get("det")
         if det:
-            lines.append(f"CV     frame {det['seq']}: {len(det['armors'])} plate(s), {det.get('n_lights', '?')} lights")
-        track = runner.latest.get("track")
-        if track and track.get("pf_alive") and "state" in track:
-            state = track["state"]
-            center_err = np.linalg.norm(np.asarray(state["center"][:2]) + base[:2] - enemy.center[:2])
-            radius = (runner.targets[self.enemy_name].spec.radius_high + runner.targets[self.enemy_name].spec.radius_low) / 2
+            found = ", ".join(a["number"] for a in det["armors"]) or "none"
+            lines.append(f"CV     frame {det['seq']}: plates {found}")
+        if tracked is not None:
+            state = runner.latest["track"]["state"]
+            spec = runner.targets[tracked].spec
+            true = states[tracked]
+            off = np.linalg.norm(np.asarray(state["center"][:2]) + runner.shooter.base_xyz[:2] - true.center[:2])
             lines += [
-                f"filter spin {state['omega']:+.1f} rad/s (true {enemy.omega:+.1f})   radius {state['radius']:.2f} m (true {radius:.2f})",
-                f"       center off by {100 * center_err:.0f} cm",
+                f"filter spin {state['omega']:+.1f} rad/s (true {true.omega:+.1f})"
+                f"   radius {state['radius']:.2f} m (true {(spec.radius_high + spec.radius_low) / 2:.2f})",
+                f"       center off by {100 * off:.0f} cm",
             ]
         else:
             lines.append("filter not tracking")
@@ -314,36 +335,32 @@ class LiveSession:
 
     # --- input -------------------------------------------------------------------------------
 
-    def _read_keys(self) -> None:
-        w = self.viewer.window
-        if w.key_press("1"):
-            self._ride(False)
-        if w.key_press("2"):
-            self._ride(True)
+    def _read_keys(self, window=None) -> None:
+        """Keys held / pressed since the last view frame (``window`` stands in for tests)."""
+        w = window or self.viewer.window
+        if w.key_press("v"):
+            self._ride(not self._riding)
         if not self.drive:
             return
-        forward, left = self._view_axes()
-        self.enemy.command_velocity = ENEMY_SPEED * _stick(w, forward, left, "up", "down", "left", "right")
-        self.base.command_velocity = BASE_SPEED * _stick(w, forward, left, "i", "k", "j", "l")
-        if w.key_press("e"):
-            self.enemy.command_omega += SPIN_STEP
-        if w.key_press("q"):
-            self.enemy.command_omega -= SPIN_STEP
-        if w.key_press("space"):
-            if self.enemy.command_omega:
-                self._saved_omega, self.enemy.command_omega = self.enemy.command_omega, 0.0
-            else:
-                self.enemy.command_omega = self._saved_omega
-        if w.key_press("r"):
-            self.enemy.reset()
-            self.base.reset()
+        if w.key_press("0"):
+            for motion in (*self.enemies, self.base):
+                motion.reset()
+            self.base_heading = 0.0
 
-    def _view_axes(self) -> tuple[np.ndarray, np.ndarray]:
-        """The view's forward and left directions, flattened onto the floor."""
-        m = self.viewer.window.get_camera_pose().to_transformation_matrix()
-        forward = m[:2, 0] if np.linalg.norm(m[:2, 0]) > 0.2 else m[:2, 2]  # looking straight down: use "up"
-        forward = forward / np.linalg.norm(forward)
-        return forward, np.array([-forward[1], forward[0]])
+        # Our robot, TR's primary-robot keys: moves relative to where the turret points.
+        forward, left = _axes(w, "t", "g", "f", "h")
+        c, s = math.cos(self.runner.turret.yaw), math.sin(self.runner.turret.yaw)
+        self.base.command_velocity = self.speed * np.array([c * forward - s * left, s * forward + c * left])
+        self._base_turn = TR_TELEOP_TURN * (w.key_down("r") - w.key_down("y"))
+
+        # Enemies, TR's secondary-robot keys along the field axes; Shift / Ctrl pick the 2nd / 3rd.
+        pick = 2 if w.ctrl else 1 if w.shift else 0
+        for i, enemy in enumerate(self.enemies):
+            enemy.command_velocity = self.speed * np.array(_axes(w, "i", "k", "j", "l")) if i == pick else np.zeros(2)
+        if pick < len(self.enemies):
+            for key, fraction in SPIN_PRESETS.items():
+                if w.key_press(key):
+                    self.enemies[pick].command_omega = fraction * self.max_spin
 
     def _ride(self, on: bool) -> None:
         """Put the view on our turret camera (with its field of view), or give it back."""
@@ -384,15 +401,9 @@ class LiveSession:
         return cv2.resize(bgr, None, fx=0.5, fy=0.5, interpolation=cv2.INTER_AREA)
 
 
-def _stick(window, forward, left, up_key, down_key, left_key, right_key) -> np.ndarray:
-    d = np.zeros(2)
-    if window.key_down(up_key):
-        d += forward
-    if window.key_down(down_key):
-        d -= forward
-    if window.key_down(left_key):
-        d += left
-    if window.key_down(right_key):
-        d -= left
-    n = np.linalg.norm(d)
-    return d / n if n > 0 else d
+def _axes(window, plus_x: str, minus_x: str, plus_y: str, minus_y: str) -> tuple[float, float]:
+    """Held keys as (x, y) in {-1, 0, 1}; like TR, both axes at once make a faster diagonal."""
+    return (
+        float(window.key_down(plus_x)) - float(window.key_down(minus_x)),
+        float(window.key_down(plus_y)) - float(window.key_down(minus_y)),
+    )

@@ -69,7 +69,7 @@ def evaluate(run_dir: Path) -> dict:
         for target in gt["targets"]:
             for plate in target["plates"]:
                 px = np.asarray(plate["corners_px"], float)
-                if not plate["facing"] or not np.all(np.isfinite(px)):
+                if not plate["facing"] or plate.get("occluded") or not np.all(np.isfinite(px)):
                     continue
                 if np.any(px[:, 0] < 0) or np.any(px[:, 0] > 1439) or np.any(px[:, 1] < 0) or np.any(px[:, 1] > 1079):
                     continue
@@ -112,9 +112,10 @@ def evaluate(run_dir: Path) -> dict:
 
         track = tracks.get(seq)
         if track and track.get("pf_alive") and gt["targets"]:
-            target = gt["targets"][0]
             state = track["state"]
             center = np.asarray(state["center"])
+            # The enemy the filter is on (a run can have several): the true center nearest its estimate.
+            target = min(gt["targets"], key=lambda tg: np.linalg.norm(np.asarray(tg["center_base"])[:2] - center[:2]))
             gt_center = np.asarray(target["center_base"])
             center_xy_err.append(float(np.linalg.norm(center[:2] - gt_center[:2])))
             center_z_err.append(float(center[2] - gt_center[2]))

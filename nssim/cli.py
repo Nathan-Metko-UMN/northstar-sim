@@ -59,15 +59,15 @@ def cmd_run(args) -> None:
 def cmd_drive(args) -> None:
     from nssim.scenarios import drive
 
-    cfg = drive(distance=args.distance, **({"fps": args.fps} if args.fps else {}))
+    cfg = drive(distance=args.distance, enemies=args.enemies, **({"fps": args.fps} if args.fps else {}))
     if args.turret:
         cfg.turret.mode = args.turret
     if args.no_compress:
         cfg.compress_frames = False
-    _execute(cfg, args, live="drive")
+    _execute(cfg, args, live="drive", speed=args.speed, max_spin=args.max_spin)
 
 
-def _execute(cfg, args, live: str | None) -> None:
+def _execute(cfg, args, live: str | None, **live_options) -> None:
     """Start Northstar-CV, run the scenario (optionally in the live viewer), evaluate."""
     from nssim.cv_build import binary_path, image_exists
     from nssim.cv_launcher import CvContainer
@@ -86,7 +86,7 @@ def _execute(cfg, args, live: str | None) -> None:
     if live:
         from nssim.live import LiveSession
 
-        session = LiveSession(runner, drive=live == "drive", show_cv=not args.no_cv_window)
+        session = LiveSession(runner, drive=live == "drive", show_cv=not args.no_cv_window, **live_options)
 
     container = None
     if not args.no_launch:
@@ -171,6 +171,10 @@ def main(argv=None) -> None:
 
     dr = sub.add_parser("drive", help="drive the enemy (and our robot) live while Northstar-CV tracks it")
     dr.add_argument("--distance", type=float, default=3.0, help="starting distance to the enemy (m)")
+    dr.add_argument("--enemies", type=int, default=1, choices=[1, 2, 3],
+                    help="infantry, + hero, + sentry (Shift / Ctrl drive the 2nd / 3rd, as in TR's sim)")
+    dr.add_argument("--speed", type=float, default=0.6, help="m/s while a move key is held (TR's default 0.6)")
+    dr.add_argument("--max-spin", type=float, default=4.5, help="rad/s for spin key 1 / 9 (TR's default 4.5)")
     dr.add_argument("--fps", type=float, help="camera frame rate (default 50; 166 runs in slow motion)")
     dr.add_argument("--turret", choices=["hold", "ideal", "second_order"])
     dr.add_argument("--no-compress", action="store_true", help="send raw Bayer frames (fast links)")
