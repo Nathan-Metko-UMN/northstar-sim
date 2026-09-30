@@ -56,6 +56,37 @@ the evaluation. Options: `--duration`, `--fps`, `--turret hold|ideal|second_orde
 `telemetry.jsonl` (what Northstar-CV reported), `events.jsonl`, `cv.log`, `config.json` and
 `summary.json`.
 
+## Watching and driving
+
+```powershell
+.venv\Scripts\nssim drive                    # drive the enemy yourself while Northstar-CV tracks it
+.venv\Scripts\nssim run spinning --view      # watch any scenario live
+```
+
+Both open SAPIEN's 3D viewer on the arena and a second window with the frame Northstar-CV
+received (green: true light bars, cyan: its detections, magenta: candidates its classifier
+rejected). Wireframes in the viewer show our robot (white), where the turret points (red), the aim
+Northstar-CV sent (yellow), and its particle filter: the four plates and center it believes in
+(magenta) against the enemy's true center (green), plus its ballistic aim point (yellow). The panel
+has live numbers: filter spin and radius against the truth, and the real-time factor.
+
+Keys (with the viewer window focused):
+
+| key | |
+|---|---|
+| arrows | drive the enemy, relative to the view |
+| Q / E | enemy spin slower / faster (1 rad/s steps) |
+| space | stop / restart the spin |
+| I J K L | drive our robot |
+| R | reset positions |
+| 1 / 2 | free view / ride on our turret camera |
+| mouse, W A S D | move the view (right-drag turns, scroll zooms) |
+
+The run is paced to the wall clock. With Northstar-CV in Docker Desktop each frame costs about
+20 ms of wall time, so `drive` defaults to a 50 fps camera, which runs close to real time;
+`--fps 166` gives the real camera rate in slow motion (the panel shows the factor). Close the
+viewer to stop; the run is saved and evaluated like any other.
+
 ## Where Northstar-CV and the TR assets come from
 
 `external/Northstar-CV` and `external/TR-Simulation-ARCTIC-2026` are git submodules pinned to
@@ -122,6 +153,7 @@ nssim/mcb          virtual MCB, UART link, turret model
 nssim/camera       Triton2 camera model, lens effects, Bayer mosaic, frame stream
 nssim/sim          SAPIEN scene, TR assets, targets, our turret kinematics
 nssim/runner.py    paced run loop
+nssim/live.py      live viewer and keyboard driving
 nssim/eval.py      metrics
 nssim/cv_build.py  Docker images + Northstar-CV build
 nssim/debug.py     re-render logged frames

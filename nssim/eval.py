@@ -149,7 +149,33 @@ def evaluate(run_dir: Path) -> dict:
     }
 
 
+def _mean_rms(stat: dict, scale: float, unit: str, digits: int = 1) -> str:
+    if not stat.get("n"):
+        return "n/a"
+    return f"{stat['mean'] * scale:+.{digits}f}{unit} (rms {stat['rms'] * scale:.{digits}f})"
+
+
+def format_summary(summary: dict) -> str:
+    """The headline numbers of evaluate(), one topic per line."""
+    d, m, f = summary["detection"], summary["measurement_m"], summary["filter"]
+    recall = "n/a" if d["recall"] is None else f"{d['recall']:.2f}"
+    corners = d["corner_error_px"]
+    cv_ms = summary["timing"]["processing_ms"]
+    return "\n".join([
+        f"frames     {summary['frames']}",
+        f"detection  recall {recall} of {d['visible_plates']} visible plates, {d['misread_numbers']} misread"
+        + (f", corners {corners['rms']:.2f} px rms" if corners.get("n") else ""),
+        f"plates     range {_mean_rms(m['range'], 100, ' cm')}, lateral {_mean_rms(m['lateral'], 1000, ' mm')},"
+        f" vertical {_mean_rms(m['vertical'], 1000, ' mm')}",
+        f"filter     center {_mean_rms(f['center_xy_m'], 100, ' cm')}, velocity {_mean_rms(f['velocity_mps'], 1, ' m/s', 2)},"
+        f" radius {_mean_rms(f['radius_m'], 100, ' cm')}",
+        f"           spin {_mean_rms(f['omega_radps'], 1, ' rad/s', 2)},"
+        f" orientation {_mean_rms(f['orientation_rad'], 180 / math.pi, ' deg')}",
+        f"CV time    {cv_ms['mean']:.1f} ms mean, {cv_ms['p95_abs']:.1f} ms p95" if cv_ms.get("n") else "CV time    n/a",
+    ])
+
+
 def main(run_dir: str) -> None:
     summary = evaluate(Path(run_dir))
     (Path(run_dir) / "summary.json").write_text(json.dumps(summary, indent=2))
-    print(json.dumps(summary, indent=2))
+    print(format_summary(summary))

@@ -11,11 +11,11 @@ import numpy as np
 
 from nssim.camera import apply_optics
 from nssim.runner import RunConfig
-from nssim.sim.assets import FLOOR_TOP_Z, TrAssets
-from nssim.sim.robot_constants import load_plate_dims, load_robot_constants
+from nssim.sim.assets import TrAssets
+from nssim.sim.geometry import Transform
+from nssim.sim.robot_constants import load_plate_dims
 from nssim.sim.scene import ArenaScene
-from nssim.sim.shooter import Shooter
-from nssim.sim.targets import Target
+from nssim.sim.targets import TargetState, plate_transforms
 
 
 def load_config(run_dir: Path) -> RunConfig:
@@ -32,15 +32,25 @@ def render_logged_frame(run_dir: Path, seq: int, cv_dir: Path, out: Path) -> Pat
 
     assets = TrAssets(plate_dims=load_plate_dims(cv_dir))
     scene = ArenaScene(assets, cfg.camera, cfg.appearance)
-    targets = {}
-    for tc in cfg.targets:
-        scene.add_target(tc.spec)
-        targets[tc.spec.name] = Target(tc.spec, tc.motion, FLOOR_TOP_Z)
-    shooter = Shooter(load_robot_constants(cv_dir), [*cfg.shooter_base_xy, FLOOR_TOP_Z])
+    specs = {tc.spec.name: tc.spec for tc in cfg.targets}
+    for spec in specs.values():
+        scene.add_target(spec)
 
+    # Everything from the logged ground truth, so driven (nssim drive) runs re-render correctly too.
     gt = frame["gt"]
-    cam_pose = shooter.camera(gt["turret"]["yaw"], gt["turret"]["pitch"])
-    states = {name: t.state(gt["t"]) for name, t in targets.items()}
+    base = np.asarray(gt["base_world"], float)
+    cam_pose = Transform(np.asarray(gt["camera_world"]["R"], float), np.asarray(gt["camera_world"]["p"], float))
+    states = {}
+    for target in gt["targets"]:
+        center = np.asarray(target["center_base"], float) + base
+        spec = specs[target["name"]]
+        states[target["name"]] = TargetState(
+            center=center,
+            velocity=np.asarray(target["velocity"], float),
+            spin=target["spin"],
+            omega=target["omega"],
+            plates=plate_transforms(spec, center, target["spin"]),
+        )
     bgr = cv2.cvtColor(apply_optics(scene.render(cam_pose, states), cfg.optics), cv2.COLOR_RGB2BGR)
 
     for target in gt["targets"]:

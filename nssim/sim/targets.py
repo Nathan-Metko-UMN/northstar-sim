@@ -8,6 +8,8 @@ distances from the center to each plate's light-bar center, which is what PnP me
 
 from __future__ import annotations
 
+import math
+
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -94,6 +96,52 @@ class Motion:
 
     def spin(self, t: float) -> float:
         return self.spin0 + self.omega * t
+
+
+class DrivenMotion:
+    """Motion steered live (``nssim drive``), with the same interface as :class:`Motion`.
+
+    The velocity follows the commanded velocity with a first-order lag and the spin rate ramps
+    toward the commanded rate, so what the filter sees is something a robot could do. The state is
+    "now": ``center_xy(t)`` and friends ignore t and return the current integrated state.
+    """
+
+    def __init__(self, start_xy, spin0: float = 0.0, velocity_tau_s: float = 0.25, spin_accel: float = 12.0,
+                 bounds=None):
+        self.start = np.array(start_xy, dtype=float)
+        self.spin0 = float(spin0)
+        self.velocity_tau_s = velocity_tau_s
+        self.spin_accel = spin_accel  # rad/s^2
+        self.bounds = bounds  # ((xmin, ymin), (xmax, ymax)) or None
+        self.command_velocity = np.zeros(2)
+        self.command_omega = 0.0
+        self.reset()
+
+    def reset(self) -> None:
+        self.xy = self.start.copy()
+        self.v = np.zeros(2)
+        self.angle = self.spin0
+        self.omega = 0.0
+
+    def step(self, dt: float) -> None:
+        self.v += (self.command_velocity - self.v) * (1.0 - math.exp(-dt / self.velocity_tau_s))
+        self.xy += self.v * dt
+        if self.bounds is not None:
+            clipped = np.clip(self.xy, self.bounds[0], self.bounds[1])
+            self.v[clipped != self.xy] = 0.0
+            self.xy = clipped
+        max_change = self.spin_accel * dt
+        self.omega += float(np.clip(self.command_omega - self.omega, -max_change, max_change))
+        self.angle += self.omega * dt
+
+    def center_xy(self, t: float) -> np.ndarray:
+        return self.xy.copy()
+
+    def velocity_xy(self, t: float) -> np.ndarray:
+        return self.v.copy()
+
+    def spin(self, t: float) -> float:
+        return self.angle
 
 
 @dataclass

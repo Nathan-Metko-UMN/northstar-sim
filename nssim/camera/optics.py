@@ -12,9 +12,12 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
+from functools import lru_cache
 
 import cv2
 import numpy as np
+
+_LINEAR_LEVELS = 65536  # resolution of the linear -> 8-bit table (fine enough near black)
 
 
 @dataclass
@@ -27,21 +30,28 @@ class Optics:
 
 
 def apply_optics(rgb: np.ndarray, optics: Optics) -> np.ndarray:
-    """HxWx3 uint8 render -> the image the sensor sees (new contiguous array)."""
-    out = np.ascontiguousarray(rgb)
-    if out is rgb:
-        out = rgb.copy()
+    """HxWx3 uint8 render -> the image the sensor sees (a new array; the input is not modified)."""
+    if optics.psf_sigma_px > 0:
+        # 3x3 holds ~97% of a sigma-0.7 kernel's weight at half the cost of OpenCV's default 5x5.
+        ksize = 3 if optics.psf_sigma_px <= 0.8 else 0
+        out = cv2.GaussianBlur(rgb, (ksize, ksize), optics.psf_sigma_px)
+    else:
+        out = np.array(rgb, copy=True)
     if optics.glare_strength > 0:
         _add_glare(out, optics)
-    if optics.psf_sigma_px > 0:
-        out = cv2.GaussianBlur(out, (0, 0), optics.psf_sigma_px)
     return out
+
+
+@lru_cache(maxsize=4)
+def _tables(gamma: float) -> tuple[np.ndarray, np.ndarray]:
+    to_linear = ((np.arange(256) / 255.0) ** gamma).astype(np.float32)
+    to_8bit = np.round(255.0 * np.linspace(0.0, 1.0, _LINEAR_LEVELS) ** (1.0 / gamma)).astype(np.uint8)
+    return to_linear, to_8bit
 
 
 def _add_glare(img: np.ndarray, optics: Optics) -> None:
     t = optics.glare_threshold
-    dark = cv2.inRange(img, (0, 0, 0), (t - 1, t - 1, t - 1))
-    sources = cv2.bitwise_not(dark)
+    sources = cv2.bitwise_not(cv2.inRange(img, (0, 0, 0), (t - 1, t - 1, t - 1)))
     x, y, w, h = cv2.boundingRect(sources)
     if w == 0 or h == 0:
         return
@@ -50,8 +60,11 @@ def _add_glare(img: np.ndarray, optics: Optics) -> None:
     x0, y0 = max(x - pad, 0), max(y - pad, 0)
     x1, y1 = min(x + w + pad, img.shape[1]), min(y + h + pad, img.shape[0])
     roi = img[y0:y1, x0:x1]
-    linear = (roi.astype(np.float32) / 255.0) ** optics.gamma
-    lit = linear * (sources[y0:y1, x0:x1, None] > 0)
-    halo = cv2.GaussianBlur(lit, (0, 0), optics.glare_sigma_px)
-    linear = np.minimum(linear + optics.glare_strength * halo, 1.0)
-    roi[...] = np.round(255.0 * linear ** (1.0 / optics.gamma)).astype(np.uint8)
+    to_linear, to_8bit = _tables(optics.gamma)
+    linear = to_linear[roi]
+    lit = linear * (sources[y0:y1, x0:x1, None] != 0)
+    linear += optics.glare_strength * cv2.GaussianBlur(lit, (0, 0), optics.glare_sigma_px)
+    np.minimum(linear, 1.0, out=linear)
+    index = (linear * (_LINEAR_LEVELS - 1) + 0.5).astype(np.uint16)
+    # Glare only adds light; the max keeps table rounding from darkening untouched pixels.
+    np.maximum(roi, to_8bit[index], out=roi)

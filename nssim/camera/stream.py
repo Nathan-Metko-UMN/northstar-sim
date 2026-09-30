@@ -22,6 +22,7 @@ import json
 import socket
 import struct
 import zlib
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 
 MAGIC_HELLO = b"NSHL"
@@ -87,10 +88,11 @@ def pack_frame(
     oracle: dict | None = None,
     compress: bool = False,
 ) -> bytes:
-    data = bytes(image)
     if compress:
-        data = zlib.compress(data, 1)
+        data = deflate_parallel(image)
         header.flags |= FLAG_ZLIB
+    else:
+        data = bytes(image)
     if oracle is not None:
         header.flags |= FLAG_ORACLE
     header.image_bytes = len(data)
@@ -99,6 +101,29 @@ def pack_frame(
         payload = json.dumps(oracle, separators=(",", ":")).encode()
         parts += [_U32.pack(len(payload)), payload]
     return pack_message(MAGIC_FRAME, b"".join(parts))
+
+
+_DEFLATE_POOL = ThreadPoolExecutor(max_workers=4, thread_name_prefix="deflate")
+
+
+def deflate_parallel(data, chunks: int = 4, level: int = 1) -> bytes:
+    """One standard zlib stream, compressed on several threads (the way pigz does it).
+
+    Each chunk is raw deflate on its own, ended with a full flush so it stops byte-aligned and
+    unfinished; concatenated behind a zlib header, with the adler32 of all the data at the end, they
+    are an ordinary zlib stream that ``uncompress()`` reads in one go.
+    """
+    view = memoryview(data).cast("B")
+    step = -(-len(view) // chunks)
+    pieces = [view[i:i + step] for i in range(0, len(view), step)] or [view]
+
+    def deflate(index: int) -> bytes:
+        c = zlib.compressobj(level, zlib.DEFLATED, -15)
+        last = index == len(pieces) - 1
+        return c.compress(pieces[index]) + c.flush(zlib.Z_FINISH if last else zlib.Z_FULL_FLUSH)
+
+    body = b"".join(_DEFLATE_POOL.map(deflate, range(len(pieces))))
+    return bytes([0x78, 0x01]) + body + zlib.adler32(view).to_bytes(4, "big")  # zlib header: deflate, fastest
 
 
 def _recv_exact(sock: socket.socket, n: int) -> bytes:
@@ -160,7 +185,11 @@ class FrameServer:
         oracle: dict | None = None,
         compress: bool = False,
     ) -> None:
-        self._conn.sendall(pack_frame(header, image, oracle, compress))
+        self.send_packed(pack_frame(header, image, oracle, compress))
+
+    def send_packed(self, message: bytes) -> None:
+        """Send a frame message already built with pack_frame()."""
+        self._conn.sendall(message)
 
     def recv_ack(self, timeout: float | None = None) -> tuple[int, int]:
         """(seq, processing_us) of the next ack from the client."""

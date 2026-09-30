@@ -53,11 +53,26 @@ def cmd_build_cv(args) -> None:
 
 
 def cmd_run(args) -> None:
+    _execute(_config(args), args, live="view" if args.view else None)
+
+
+def cmd_drive(args) -> None:
+    from nssim.scenarios import drive
+
+    cfg = drive(distance=args.distance, **({"fps": args.fps} if args.fps else {}))
+    if args.turret:
+        cfg.turret.mode = args.turret
+    if args.no_compress:
+        cfg.compress_frames = False
+    _execute(cfg, args, live="drive")
+
+
+def _execute(cfg, args, live: str | None) -> None:
+    """Start Northstar-CV, run the scenario (optionally in the live viewer), evaluate."""
     from nssim.cv_build import binary_path, image_exists
     from nssim.cv_launcher import CvContainer
-    from nssim.eval import evaluate
+    from nssim.eval import evaluate, format_summary
 
-    cfg = _config(args)
     cv_dir = _cv_dir(args.cv_dir)
     if not args.no_launch:
         if not binary_path(cv_dir, args.build_dir).is_file():
@@ -67,6 +82,11 @@ def cmd_run(args) -> None:
     stamp = dt.datetime.now().strftime("%Y%m%d_%H%M%S")
     out_dir = Path(args.out) if args.out else REPO_ROOT / "runs" / f"{stamp}_{cfg.name}"
     runner = _runner(cfg, cv_dir, out_dir)
+    session = None
+    if live:
+        from nssim.live import LiveSession
+
+        session = LiveSession(runner, drive=live == "drive", show_cv=not args.no_cv_window)
 
     container = None
     if not args.no_launch:
@@ -74,14 +94,18 @@ def cmd_run(args) -> None:
         print("[nssim] starting Northstar-CV:", " ".join(container.command()), flush=True)
         container.start(out_dir / "cv.log")
     try:
-        runner.run()
+        runner.run(session)
+    except KeyboardInterrupt:
+        print("[nssim] interrupted", flush=True)
     finally:
+        if session is not None:
+            session.close()
         if container is not None:
             container.stop()
     summary = evaluate(out_dir)
     (out_dir / "summary.json").write_text(json.dumps(summary, indent=2))
-    print(json.dumps(summary, indent=2))
-    print(f"[nssim] run saved to {out_dir}")
+    print(format_summary(summary))
+    print(f"[nssim] run saved to {out_dir} (full metrics in summary.json)")
 
 
 def cmd_eval(args) -> None:
@@ -141,7 +165,22 @@ def main(argv=None) -> None:
     run.add_argument("--no-launch", action="store_true", help="don't start the container (Northstar-CV started elsewhere)")
     run.add_argument("--image", default="northstar-cv:sim")
     run.add_argument("--build-dir", default="build/sim-x86")
+    run.add_argument("--view", action="store_true", help="watch it live in a 3D viewer (paced to real time)")
+    run.add_argument("--no-cv-window", action="store_true", help="with --view: skip the camera window")
     run.set_defaults(func=cmd_run)
+
+    dr = sub.add_parser("drive", help="drive the enemy (and our robot) live while Northstar-CV tracks it")
+    dr.add_argument("--distance", type=float, default=3.0, help="starting distance to the enemy (m)")
+    dr.add_argument("--fps", type=float, help="camera frame rate (default 50; 166 runs in slow motion)")
+    dr.add_argument("--turret", choices=["hold", "ideal", "second_order"])
+    dr.add_argument("--no-compress", action="store_true", help="send raw Bayer frames (fast links)")
+    dr.add_argument("--no-cv-window", action="store_true", help="skip the window with the CV's camera image")
+    dr.add_argument("--cv-dir", help="Northstar-CV checkout to test (default: the external/Northstar-CV submodule)")
+    dr.add_argument("--out")
+    dr.add_argument("--no-launch", action="store_true", help="don't start the container (Northstar-CV started elsewhere)")
+    dr.add_argument("--image", default="northstar-cv:sim")
+    dr.add_argument("--build-dir", default="build/sim-x86")
+    dr.set_defaults(func=cmd_drive)
 
     ev = sub.add_parser("eval", help="evaluate a run directory")
     ev.add_argument("run_dir")

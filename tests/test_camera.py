@@ -87,3 +87,13 @@ def test_stream_roundtrip(compress):
     client.close()
     server.close()
     assert acks == [(7, 1234)]
+
+
+def test_parallel_deflate_is_one_standard_zlib_stream():
+    import zlib
+
+    from nssim.camera.stream import deflate_parallel
+
+    data = np.random.default_rng(1).integers(0, 30, (108, 144), dtype=np.uint8)
+    for chunks in (1, 3, 4):
+        assert zlib.decompress(deflate_parallel(data, chunks=chunks)) == data.tobytes()

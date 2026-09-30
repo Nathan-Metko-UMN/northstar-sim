@@ -19,10 +19,12 @@ import math
 import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
+from typing import Protocol
 
 import numpy as np
 
 from nssim.camera import CameraModel, FrameHeader, FrameServer, LinkModel, Optics, apply_optics, mosaic_rggb
+from nssim.camera.stream import pack_frame
 from nssim.mcb import McbConfig, TurretState, VirtualMcb
 from nssim.mcb.link import UartLink
 from nssim.mcb.turret import TurretConfig, TurretModel
@@ -36,6 +38,18 @@ from nssim.sim.targets import Motion, Target, TargetSpec, light_bar_corners
 from nssim.telemetry import TelemetryReceiver
 
 
+class RunHooks(Protocol):
+    """Lets an interactive session (e.g. ``nssim drive``) ride along with the paced loop."""
+
+    stop_requested: bool
+
+    def tick(self, runner: "Runner", t: float, dt: float) -> None:
+        """Every MCB tick, before the turret and targets advance to time t."""
+
+    def frame_delivered(self, runner: "Runner", frame: "_PendingFrame") -> None:
+        """After Northstar-CV has acked a frame (its telemetry is in ``runner.latest``)."""
+
+
 @dataclass
 class TargetConfig:
     spec: TargetSpec = field(default_factory=TargetSpec)
@@ -45,7 +59,7 @@ class TargetConfig:
 @dataclass
 class RunConfig:
     name: str = "run"
-    duration_s: float = 5.0
+    duration_s: float = 5.0  # math.inf runs until a hook stops it
     fps: float = 1e6 / 6000  # camera frame rate in sim time
     exposure_us: int = 2000
     link: LinkModel = field(default_factory=LinkModel)
@@ -76,6 +90,7 @@ class _PendingFrame:
     arrival_us: int
     bayer: np.ndarray
     gt: dict
+    develop_ms: dict = field(default_factory=dict)  # wall time spent making the image
 
 
 def _json_default(obj):
@@ -108,6 +123,8 @@ class Runner:
         self._pending_rx: list[tuple[int, bytes]] = []  # (apply at MCB us, raw frame bytes)
         self._aims_received = 0
         self.mcb_us = config.mcb.boot_offset_us
+        self.base_velocity = np.zeros(2)  # our chassis, world xy (only nonzero when driven)
+        self.latest: dict[str, dict] = {}  # newest telemetry message of each type
         self._files = {
             name: open(self.out_dir / f"{name}.jsonl", "w")
             for name in ("frames", "telemetry", "events")
@@ -140,7 +157,13 @@ class Runner:
     # --- helpers -----------------------------------------------------------------------------
 
     def _turret_state(self) -> TurretState:
-        return TurretState(yaw=self.turret.yaw, pitch=self.turret.pitch, yaw_rate=self.turret.yaw_rate)
+        return TurretState(
+            yaw=self.turret.yaw,
+            pitch=self.turret.pitch,
+            yaw_rate=self.turret.yaw_rate,
+            chassis_vel_x=float(self.base_velocity[0]),
+            chassis_vel_y=float(self.base_velocity[1]),
+        )
 
     def _mcb_tx(self) -> None:
         for queued_us, data in self.mcb.poll_tx(self.mcb_us, self._turret_state()):
@@ -159,6 +182,7 @@ class Runner:
         for msg in self.telemetry.poll():
             msg["_rx_wall"] = now
             self._log("telemetry", msg)
+            self.latest[msg.get("type", "?")] = msg
 
     def _collect_rx(self) -> list[tuple[int, bytes]]:
         """Complete frames the CV has written so far, as (msg_type, frame bytes) for the MCB."""
@@ -231,7 +255,8 @@ class Runner:
                     "name": name,
                     "number": spec.number,
                     "center_base": state.center - base,
-                    "velocity": state.velocity,
+                    # The base frame moves with our robot (axes stay world-aligned).
+                    "velocity": state.velocity - self.base_velocity,
                     "spin": state.spin,
                     "omega": state.omega,
                     "radius_high": spec.radius_high,
@@ -263,8 +288,10 @@ class Runner:
             odom_watermark_mcb_us=-1 if watermark is None else watermark,
         )
         aims_before = self._aims_received
+        wall_pack = time.perf_counter()
+        message = pack_frame(header, frame.bayer, compress=self.config.compress_frames)
         wall0 = time.perf_counter()
-        self.frames.send_frame(header, frame.bayer, compress=self.config.compress_frames)
+        self.frames.send_packed(message)
         wall_sent = time.perf_counter()
         seq, processing_us = self.frames.recv_ack(timeout=self.config.ack_timeout_s)
         wall_ack = time.perf_counter()
@@ -274,8 +301,9 @@ class Runner:
         # The aim for this frame was written to the UART just before the ack; give socat a moment.
         rx = self._collect_rx()
         deadline = time.perf_counter() + 0.5
-        while self._aims_received == aims_before and time.perf_counter() < deadline:
-            time.sleep(0.0002)
+        while self._aims_received == aims_before:
+            if not self.link.wait_readable(deadline - time.perf_counter()):
+                break
             rx += self._collect_rx()
         wall_aim = time.perf_counter()
         apply_base = frame.arrival_us + processing_us
@@ -291,7 +319,10 @@ class Runner:
                 "arrival_us": frame.arrival_us,
                 "processing_us": processing_us,
                 "wall_roundtrip_ms": (wall_ack - wall0) * 1e3,
+                "image_bytes": header.image_bytes,
                 "wall_ms": {
+                    **frame.develop_ms,
+                    "pack": (wall0 - wall_pack) * 1e3,
                     "send": (wall_sent - wall0) * 1e3,
                     "ack": (wall_ack - wall_sent) * 1e3,
                     "aim": (wall_aim - wall_ack) * 1e3,
@@ -301,7 +332,7 @@ class Runner:
             },
         )
 
-    def run(self) -> Path:
+    def run(self, hooks: RunHooks | None = None) -> Path:
         cfg = self.config
         try:
             self._startup()
@@ -313,12 +344,14 @@ class Runner:
             next_render_us = t0_us + period_us - half_exposure
             pending: list[_PendingFrame] = []
             frame_bytes = cfg.camera.width * cfg.camera.height
-            end_us = t0_us + int(cfg.duration_s * 1e6)
+            end_us = t0_us + cfg.duration_s * 1e6  # float, so an infinite duration works
             wall_start = time.perf_counter()
 
-            while self.mcb_us < end_us:
+            while self.mcb_us < end_us and not (hooks and hooks.stop_requested):
                 self.mcb_us += cfg.tick_us
                 t = (self.mcb_us - t0_us) / 1e6
+                if hooks is not None:
+                    hooks.tick(self, t, cfg.tick_us / 1e6)
 
                 # CV -> MCB messages that have arrived by now (aims, ALIVE, ...).
                 due = [p for p in self._pending_rx if p[0] <= self.mcb_us]
@@ -333,24 +366,31 @@ class Runner:
                 self._mcb_tx()
 
                 if self.mcb_us >= next_render_us:
+                    w0 = time.perf_counter()
                     gt, cam_pose, states = self._ground_truth(t)
-                    rgb = apply_optics(self.scene.render(cam_pose, states), cfg.optics)
+                    w1 = time.perf_counter()
+                    rgb = self.scene.render(cam_pose, states)
+                    w2 = time.perf_counter()
+                    bayer = mosaic_rggb(apply_optics(rgb, cfg.optics))
+                    w3 = time.perf_counter()
                     capture_us = next_render_us + half_exposure
                     start = max(capture_us, link_free_us)
                     link_free_us = start + cfg.link.transfer_us(frame_bytes)
-                    pending.append(
-                        _PendingFrame(seq, capture_us, self.mcb_us, link_free_us, mosaic_rggb(rgb), gt)
-                    )
+                    develop = {"ground_truth": (w1 - w0) * 1e3, "render": (w2 - w1) * 1e3, "optics": (w3 - w2) * 1e3}
+                    pending.append(_PendingFrame(seq, capture_us, self.mcb_us, link_free_us, bayer, gt, develop))
                     seq += 1
                     next_render_us += period_us
 
                 while pending and pending[0].arrival_us <= self.mcb_us:
-                    self._deliver(pending.pop(0))
+                    frame = pending.pop(0)
+                    self._deliver(frame)
+                    if hooks is not None:
+                        hooks.frame_delivered(self, frame)
 
                 self.link.flush(self.mcb_us)
 
             wall = time.perf_counter() - wall_start
-            self._event("done", frames=seq, sim_s=cfg.duration_s, wall_s=round(wall, 2))
+            self._event("done", frames=seq, sim_s=round((self.mcb_us - t0_us) / 1e6, 3), wall_s=round(wall, 2))
         finally:
             for f in self._files.values():
                 f.close()

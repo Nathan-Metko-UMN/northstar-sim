@@ -6,6 +6,7 @@ would deliver them, so odometry reaches the CV with realistic serialization dela
 
 from __future__ import annotations
 
+import select
 import socket
 from collections import deque
 from dataclasses import dataclass
@@ -65,6 +66,13 @@ class UartLink:
                 self._conn.sendall(out)
             finally:
                 self._conn.setblocking(False)
+
+    def wait_readable(self, timeout: float) -> bool:
+        """Block until the CV has written something (True) or the timeout passes (False)."""
+        if self._conn is None:
+            return False
+        readable, _, _ = select.select([self._conn], [], [], max(timeout, 0.0))
+        return bool(readable)
 
     def recv(self) -> bytes:
         """Whatever the CV has written so far (non-blocking)."""

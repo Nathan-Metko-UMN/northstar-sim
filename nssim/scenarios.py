@@ -50,6 +50,23 @@ def strafing(omega: float = 4.0, amplitude: float = 0.6, hz: float = 0.5) -> Run
     )
 
 
+def drive(distance: float = 3.0, fps: float = 50.0) -> RunConfig:
+    """``nssim drive``: open-ended; the enemy starts still in front of us and is steered live.
+
+    50 fps by default, about what the paced loop manages in real time on a desktop with Northstar-CV
+    in Docker Desktop; at the camera's 166 fps it runs in slow motion.
+    """
+    return RunConfig(
+        name="drive",
+        duration_s=math.inf,
+        fps=fps,
+        shooter_base_xy=[-1.5, 0.0],
+        initial_aim="enemy",
+        turret=TurretConfig(mode="second_order"),
+        targets=[TargetConfig(TargetSpec(), Motion(start=[-1.5 + distance, 0.0]))],
+    )
+
+
 SCENARIOS = {
     "static_plate": static_plate,
     "spinning": spinning,

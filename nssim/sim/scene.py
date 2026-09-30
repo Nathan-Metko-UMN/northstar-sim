@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+import cv2
 import numpy as np
 import sapien
 
@@ -166,16 +167,25 @@ class ArenaScene:
         for name in [FIELD_FLOOR, *FIELD_ELEMENTS]:
             builder = self.scene.create_actor_builder()
             builder.add_visual_from_file(str(self.assets.field_file(name)))
-            builder.build_kinematic(name=name)
+            entity = builder.build_kinematic(name=name)
+            if name == FIELD_FLOOR:
+                body = entity.find_component_by_type(sapien.render.RenderBodyComponent)
+                aabb = body.compute_global_aabb_tight()
+                self.floor_bounds = (aabb[0, :2].astype(float), aabb[1, :2].astype(float))  # xy min, max
 
     def add_target(self, spec: TargetSpec) -> None:
         self.targets[spec.name] = _TargetVisual(self.scene, self.assets, spec, self.appearance)
 
-    def render(self, camera_pose: Transform, targets: dict[str, TargetState]) -> np.ndarray:
-        """RGB uint8 (H, W, 3) from the given camera pose (x forward, y left, z up)."""
+    def set_targets(self, targets: dict[str, TargetState]) -> None:
+        """Pose the robots (render() does this too; the live viewer calls it between frames)."""
         for name, state in targets.items():
             self.targets[name].update(state)
+
+    def render(self, camera_pose: Transform, targets: dict[str, TargetState]) -> np.ndarray:
+        """RGB uint8 (H, W, 3) from the given camera pose (x forward, y left, z up)."""
+        self.set_targets(targets)
         self.camera.entity.set_pose(camera_pose.to_sapien())
         self.scene.update_render()
         self.camera.take_picture()
-        return self.camera.get_picture("Color")[..., :3]  # uint8, see set_picture_format
+        # uint8 RGBA (see set_picture_format); cvtColor drops alpha ~10x faster than a numpy copy.
+        return cv2.cvtColor(self.camera.get_picture("Color"), cv2.COLOR_RGBA2RGB)
