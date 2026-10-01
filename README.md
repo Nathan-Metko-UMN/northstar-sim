@@ -19,8 +19,15 @@ SIM HOST (Windows/Linux, runs this repo)            NORTHSTAR-CV (Docker here, o
 ## Setup
 
 Northstar-CV runs either in Docker on the same machine (needs an NVIDIA GPU) or on the Jetson (see
-[Running Northstar-CV on the Jetson](#running-northstar-cv-on-the-jetson); then this machine only
-needs a GPU that does Vulkan, and integrated graphics should be enough).
+[Running Northstar-CV on the Jetson](#running-northstar-cv-on-the-jetson)). Either way the sim
+renders with SAPIEN on this machine's GPU. An NVIDIA one works; Intel's integrated UHD 770 doesn't
+(SAPIEN fails at the first frame), and other integrated GPUs are untested.
+
+With more than one GPU, `NSSIM_RENDER_DEVICE=cuda` renders on the NVIDIA one. If SAPIEN can't
+start at all (`ErrorFeatureNotPresent`, even from
+`python -c "import sapien; print(sapien.render.get_device_summary())"`), a GPU whose Vulkan driver
+lacks something SAPIEN needs may be in the way, even if it's not the one you want: try hiding the
+others with the Vulkan loader's `VK_LOADER_DRIVERS_SELECT=*nv-vk64*` (NVIDIA's driver on Windows).
 
 Everything below: git and Python 3.10–3.12. Windows (PowerShell):
 

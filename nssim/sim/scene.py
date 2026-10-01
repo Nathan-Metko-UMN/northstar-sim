@@ -6,6 +6,7 @@ before a frame is rendered, so ground truth and pixels come from the same number
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, field
 
 import cv2
@@ -141,6 +142,23 @@ def _yaw_quat(yaw: float) -> list[float]:
     return [float(np.cos(yaw / 2)), 0.0, 0.0, float(np.sin(yaw / 2))]
 
 
+RENDER_DEVICE_ENV = "NSSIM_RENDER_DEVICE"
+
+
+def render_system() -> sapien.render.RenderSystem:
+    """SAPIEN's renderer, on the GPU NSSIM_RENDER_DEVICE names (cuda for the NVIDIA one, or
+    pci:<bus address>), else the one SAPIEN picks."""
+    device = os.environ.get(RENDER_DEVICE_ENV) or None
+    try:
+        return sapien.render.RenderSystem(device) if device else sapien.render.RenderSystem()
+    except RuntimeError as e:
+        raise RuntimeError(
+            f"SAPIEN couldn't start its Vulkan renderer on {device or 'the GPU it picked'}: {e}\n"
+            f"The GPUs it sees:\n{sapien.render.get_device_summary()}\n"
+            f"Set {RENDER_DEVICE_ENV} to choose another (cuda picks the NVIDIA GPU), or update the GPU's driver."
+        ) from e
+
+
 class ArenaScene:
     def __init__(self, assets: TrAssets, camera: CameraModel, appearance: Appearance | None = None):
         self.assets = assets
@@ -149,7 +167,9 @@ class ArenaScene:
         # 8-bit color straight from the GPU: same values as clamping the float output, ~10x cheaper
         # to read back. Process-wide, so it must be set before any camera exists.
         sapien.render.set_picture_format("Color", "r8g8b8a8unorm")
-        self.scene = sapien.Scene()
+        renderer = render_system()
+        self.gpu = renderer.device.name
+        self.scene = sapien.Scene([sapien.physx.PhysxCpuSystem(), renderer])
         self._setup_lights()
         self._load_field()
         self.targets: dict[str, _TargetVisual] = {}
@@ -186,6 +206,13 @@ class ArenaScene:
         self.set_targets(targets)
         self.camera.entity.set_pose(camera_pose.to_sapien())
         self.scene.update_render()
-        self.camera.take_picture()
+        try:
+            self.camera.take_picture()
+        except RuntimeError as e:
+            # e.g. ErrorOutOfPoolMemory on Intel integrated graphics, which starts the renderer fine
+            raise RuntimeError(
+                f"SAPIEN couldn't render on {self.gpu}: {e}\n"
+                f"Set {RENDER_DEVICE_ENV}=cuda to use an NVIDIA GPU, if this machine has one."
+            ) from e
         # uint8 RGBA (see set_picture_format); cvtColor drops alpha ~10x faster than a numpy copy.
         return cv2.cvtColor(self.camera.get_picture("Color"), cv2.COLOR_RGBA2RGB)
