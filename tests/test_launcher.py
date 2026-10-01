@@ -30,9 +30,10 @@ def test_remote_in_the_dev_container_runs_the_same_command_inside_docker():
     cmd = remote.command()
     assert cmd[0] == "ssh" and cmd[-2] == "jetson1"
     words = shlex.split(cmd[-1])  # as the Jetson's shell splits it
-    assert words[:4] == ["cd", "~/CV/Northstar-CV", "&&", "exec"]
-    run = words[4:]
-    assert run[:2] == ["docker", "run"] and "--gpus" in run and "--network" in run
+    assert words[:3] == ["cd", "~/CV/Northstar-CV", "&&"]
+    assert "gpu=--runtime=nvidia;" in words  # a Jetson's runtime refuses --gpus
+    run = words[words.index("exec") + 1:]
+    assert run[:2] == ["docker", "run"] and "$gpu" in run and "--network" in run
     assert run[run.index("-v") + 1] == "$PWD:/ws"  # expanded by that shell, after the cd
     assert run[-4:-1] == ["northstar-cv:jetpack6", "bash", "-lc"]
     assert run[-1] == cv_command("10.0.0.5", "build/jetpack6", 5600, 5760, 5800)  # reaches bash intact

@@ -116,10 +116,13 @@ class CvRemote:
         inner = cv_command(self.harness_host, self.build_dir, self.frame_port, self.uart_port, self.telemetry_port)
         if self.image is None:
             return self._ssh(f"cd {self.cv_dir} && {inner}")
-        # As scripts/dev.sh runs it: the checkout at /ws and the GPU. Host networking spares the
-        # CV's connections back to this machine Docker's NAT.
+        # As scripts/dev.sh runs it: the checkout at /ws and the GPU, which on a Jetson comes through
+        # NVIDIA's container runtime (it refuses --gpus there). Host networking spares the CV's
+        # connections back to this machine Docker's NAT.
         return self._ssh(
-            f'cd {self.cv_dir} && exec docker run --rm --name {self.name} --gpus all --network host '
+            f"cd {self.cv_dir} && "
+            "if [ -r /etc/nv_tegra_release ]; then gpu=--runtime=nvidia; else gpu=--gpus=all; fi && "
+            f'exec docker run --rm --name {self.name} $gpu --network host '
             f'-v "$PWD":/ws -w /ws {self.image} bash -lc {shlex.quote(inner)}'
         )
 
