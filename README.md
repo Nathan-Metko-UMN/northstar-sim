@@ -56,7 +56,7 @@ again whenever Northstar-CV changes; the images are only rebuilt when the Docker
 from scratch with `--rebuild-images`, and when an image has changed (another CUDA, say) its build
 directory starts afresh.
 
-The robot may run JetPack 6 (CUDA 12.9, Ubuntu 22.04) or JetPack 7 (CUDA 13.2, Ubuntu 24.04), and
+The robot may run JetPack 6 (CUDA 12.6, Ubuntu 22.04) or JetPack 7 (CUDA 13.2, Ubuntu 24.04), and
 the `sim-harness` branch builds on both. The dev container has a build of each, and the default
 above is JetPack 7's; to build and run with JetPack 6's instead (images `northstar-cv:jetpack6`
 and `northstar-cv:sim-jetpack6`, build in `build/sim-jetpack6`):

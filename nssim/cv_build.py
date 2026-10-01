@@ -5,7 +5,7 @@ builds for either with its ``JETPACK`` build argument, into the same images ``sc
 uses:
 
 - JetPack 7: ``northstar-cv:jetpack7``, CUDA 13.2 on Ubuntu 24.04. Builds into ``build/sim-jetpack7``.
-- JetPack 6: ``northstar-cv:jetpack6``, CUDA 12.9 on Ubuntu 22.04. Builds into ``build/sim-jetpack6``.
+- JetPack 6: ``northstar-cv:jetpack6``, CUDA 12.6 on Ubuntu 22.04. Builds into ``build/sim-jetpack6``.
 
 On each goes socat (``docker/cv-sim.Dockerfile``), as ``northstar-cv:sim-jetpack7`` and
 ``northstar-cv:sim-jetpack6``. Both compile for this machine's GPU (to run in the sim) and the
@@ -36,7 +36,7 @@ class Toolchain:
 
 TOOLCHAINS = {
     7: Toolchain(7, "northstar-cv:jetpack7", "northstar-cv:sim-jetpack7", "build/sim-jetpack7", "CUDA 13.2 on Ubuntu 24.04"),
-    6: Toolchain(6, "northstar-cv:jetpack6", "northstar-cv:sim-jetpack6", "build/sim-jetpack6", "CUDA 12.9 on Ubuntu 22.04"),
+    6: Toolchain(6, "northstar-cv:jetpack6", "northstar-cv:sim-jetpack6", "build/sim-jetpack6", "CUDA 12.6 on Ubuntu 22.04"),
 }
 BUILD_DIR = TOOLCHAINS[7].build_dir
 

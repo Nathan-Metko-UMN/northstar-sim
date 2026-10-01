@@ -246,7 +246,7 @@ def main(argv=None) -> None:
                     help="rebuild the Docker images from scratch (latest base image and packages)")
     bc.add_argument("--jetpack", type=int, choices=[6, 7], default=7,
                     help="toolchain of Northstar-CV's dev container: 7 = CUDA 13.2 on Ubuntu 24.04 (default), "
-                    "6 = CUDA 12.9 on Ubuntu 22.04")
+                    "6 = CUDA 12.6 on Ubuntu 22.04")
     bc.set_defaults(func=cmd_build_cv)
 
     # Options for anything that runs Northstar-CV in the loop.
