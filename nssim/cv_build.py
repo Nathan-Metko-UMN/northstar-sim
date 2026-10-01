@@ -5,7 +5,7 @@ builds for either with its ``JETPACK`` build argument, into the same images ``sc
 uses:
 
 - JetPack 7: ``northstar-cv:jetpack7``, CUDA 13.2 on Ubuntu 24.04. Builds into ``build/sim-jetpack7``.
-- JetPack 6: ``northstar-cv:jetpack6``, CUDA 12.6 on Ubuntu 22.04. Builds into ``build/sim-jetpack6``.
+- JetPack 6: ``northstar-cv:jetpack6``, CUDA 12.9 on Ubuntu 22.04. Builds into ``build/sim-jetpack6``.
 
 On each goes socat (``docker/cv-sim.Dockerfile``), as ``northstar-cv:sim-jetpack7`` and
 ``northstar-cv:sim-jetpack6``. Both compile for this machine's GPU (to run in the sim) and the
@@ -14,6 +14,7 @@ Orin's sm_87 (so the Jetson's code is checked too). ``nssim run`` mounts the bui
 
 from __future__ import annotations
 
+import hashlib
 import shutil
 import subprocess
 from dataclasses import dataclass
@@ -35,7 +36,7 @@ class Toolchain:
 
 TOOLCHAINS = {
     7: Toolchain(7, "northstar-cv:jetpack7", "northstar-cv:sim-jetpack7", "build/sim-jetpack7", "CUDA 13.2 on Ubuntu 24.04"),
-    6: Toolchain(6, "northstar-cv:jetpack6", "northstar-cv:sim-jetpack6", "build/sim-jetpack6", "CUDA 12.6 on Ubuntu 22.04"),
+    6: Toolchain(6, "northstar-cv:jetpack6", "northstar-cv:sim-jetpack6", "build/sim-jetpack6", "CUDA 12.9 on Ubuntu 22.04"),
 }
 BUILD_DIR = TOOLCHAINS[7].build_dir
 
@@ -95,6 +96,29 @@ def _build_images(toolchain: Toolchain, cv_dir: Path, rebuild: bool) -> None:
           "-f", str(docker_dir / "cv-sim.Dockerfile"), str(docker_dir)])
 
 
+def image_fingerprint(image: str) -> str:
+    """Identifies the image's contents. Its ID won't do: that changes with every build, even one
+    Docker's cache answers entirely, where the layers stay the same."""
+    out = subprocess.run(
+        ["docker", "image", "inspect", "--format", "{{json .RootFS.Layers}}", image],
+        capture_output=True, text=True, check=True,
+    )
+    return hashlib.sha256(out.stdout.strip().encode()).hexdigest()[:16]
+
+
+def _match_build_dir(build_dir: Path, image: str) -> None:
+    """Starts the build directory afresh if another image configured it. CMake caches the compilers
+    it found, at the same paths in every image, so it would carry on with the old image's settings
+    (another CUDA, say) without noticing."""
+    stamp = build_dir / ".nssim-image"
+    fingerprint = image_fingerprint(image)
+    if build_dir.exists() and not (stamp.is_file() and stamp.read_text().strip() == fingerprint):
+        print(f"[nssim] {build_dir.name} was configured in another image; starting it afresh", flush=True)
+        shutil.rmtree(build_dir)
+    build_dir.mkdir(parents=True, exist_ok=True)
+    stamp.write_text(fingerprint + "\n")
+
+
 def build(cv_dir: Path, jetpack: int = 7, cuda_arch: str | None = None, rebuild_images: bool = False) -> Path:
     cv_dir = Path(cv_dir).resolve()
     toolchain = TOOLCHAINS[jetpack]
@@ -112,6 +136,7 @@ def build(cv_dir: Path, jetpack: int = 7, cuda_arch: str | None = None, rebuild_
             raise SystemExit("couldn't read the GPU's compute capability from nvidia-smi; pass --cuda-arch (e.g. 89)")
         cuda_arch = ";".join(sorted({host, ORIN_ARCH}))
     print(f"[nssim] building for JetPack {jetpack}: {toolchain.what}; CUDA archs {cuda_arch}", flush=True)
+    _match_build_dir(cv_dir / toolchain.build_dir, toolchain.image)
     script = (
         f"cmake -S . -B {toolchain.build_dir} -G Ninja -DCMAKE_BUILD_TYPE=Release '-DCMAKE_CUDA_ARCHITECTURES={cuda_arch}'"
         f" && cmake --build {toolchain.build_dir}"
