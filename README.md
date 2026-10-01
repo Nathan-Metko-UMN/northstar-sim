@@ -167,29 +167,39 @@ you trust.
 
 ## Running Northstar-CV on the Jetson
 
-The sim stays on your machine and Northstar-CV runs natively on the Jetson, so the processing time
-(and so the aim latency) is the Jetson's own. Any of `nssim run`, `run --view` and `drive` take:
+The sim stays on your machine and Northstar-CV runs on the Jetson, so the processing time (and so
+the aim latency) is the Jetson's own. Any of `nssim run`, `run --view` and `drive` take `--jetson`;
+if Northstar-CV is built in its dev container there (`scripts/dev.sh`), add that image too:
 
 ```powershell
-.venv\Scripts\nssim drive --jetson nvidia@192.168.1.50
+.venv\Scripts\nssim drive --jetson nvidia@192.168.1.50 --jetson-image northstar-cv:jetpack6
 ```
 
-It logs in over SSH, starts Northstar-CV there pointed back at this machine, and stops it at the
-end. `--jetson-dir` (default `~/Northstar-CV`) and `--jetson-build` (default `build`) say where
-the checkout and its build directory are; `--harness-ip` overrides the address the Jetson is told
-to connect back to (detected from the route to it).
+It logs in over SSH, starts Northstar-CV in a container of that image (as `dev.sh` runs one: the
+GPU, and the checkout at `/ws`) pointed back at this machine, and removes it at the end. Without
+`--jetson-image` it runs Northstar-CV natively there. `--jetson` also takes a Host from your
+`~/.ssh/config` (`--jetson jetson1`). `--jetson-dir` (default `~/Northstar-CV`) is the checkout
+and `--jetson-build` its build directory (default `build`, or `build/jetpack6` with JetPack 6's
+image, where `dev.sh` builds); `--harness-ip` overrides the address the Jetson is told to connect
+back to (found from the route to it).
 
 Once, on the Jetson:
 
 1. Check out Northstar-CV's `sim-harness` branch, the commit `external/Northstar-CV` is pinned to
-   (this repo reads the robot constants and plate sizes from the submodule, so keep them the same),
-   and build it the way you do for the robot.
-2. `sudo apt install socat` (it turns the harness's TCP link into the PTY Northstar-CV opens as its
-   UART).
+   (this repo reads the robot constants and plate sizes from the submodule, so keep them the same).
+2. Build it. In the dev container, which also builds the image:
+
+   ```bash
+   ./scripts/dev.sh bash -c "cmake -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_CUDA_ARCHITECTURES=87 && cmake --build build"
+   ```
+
+   Natively instead: build it the way you do for the robot, and `sudo apt install socat` (it
+   turns the harness's TCP link into the PTY Northstar-CV opens as its UART; the image has it).
 
 Once, on this machine:
 
-1. SSH without a password prompt: `ssh-keygen -t ed25519` (skip if you have a key), then
+1. SSH without a password prompt (skip if `ssh <jetson>` already logs in with a key):
+   `ssh-keygen -t ed25519` (skip if you have a key), then
    `type $env:USERPROFILE\.ssh\id_ed25519.pub | ssh nvidia@<jetson> "cat >> ~/.ssh/authorized_keys"`
    (Linux: `ssh-copy-id nvidia@<jetson>`).
 2. Let the Jetson in: it connects to TCP 5600 and 5760 and sends UDP to 5800 on this machine. On

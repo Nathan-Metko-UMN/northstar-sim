@@ -6,6 +6,7 @@ Either way socat exposes the harness's TCP UART as a PTY, and NorthstarCV2 runs 
 
 from __future__ import annotations
 
+import shlex
 import socket
 import subprocess
 from dataclasses import dataclass
@@ -32,6 +33,20 @@ def local_address_towards(host: str) -> str:
     with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
         s.connect((target, 9))  # UDP connect sends nothing; it only picks the route
         return s.getsockname()[0]
+
+
+def ssh_hostname(destination: str) -> str:
+    """The machine an ssh destination reaches: the HostName of an alias in ~/.ssh/config (ssh -G
+    resolves it the way ssh would), else the host part of user@host."""
+    try:
+        out = subprocess.run(["ssh", "-G", destination], capture_output=True, text=True, timeout=10).stdout
+    except (OSError, subprocess.TimeoutExpired):
+        out = ""
+    for line in out.splitlines():
+        key, _, value = line.partition(" ")
+        if key == "hostname" and value.strip():
+            return value.strip()
+    return destination.rsplit("@", 1)[-1]
 
 
 @dataclass
@@ -72,31 +87,41 @@ class CvContainer:
 
 @dataclass
 class CvRemote:
-    """Northstar-CV built natively on another machine (the Jetson), started over SSH.
+    """Northstar-CV on another machine (the Jetson), started over SSH: natively, or in the Docker
+    image its scripts/dev.sh builds there (``image``).
 
-    That machine needs Northstar-CV built from a branch with the simulator mode, socat, and this
-    machine's frame, UART and telemetry ports reachable (see the README's firewall note). SSH must
-    log in without a password prompt (a key).
+    That machine needs Northstar-CV built from a branch with the simulator mode, socat (in the
+    image, or installed natively), and this machine's frame, UART and telemetry ports reachable
+    (see the README's firewall note). SSH must log in without a password prompt (a key).
     """
 
-    host: str  # ssh destination, e.g. "nvidia@jetson.local"
+    host: str  # ssh destination: "nvidia@jetson.local", or a Host alias from ~/.ssh/config
     cv_dir: str = "~/Northstar-CV"
     build_dir: str = "build"
     harness_host: str | None = None  # default: this machine's address on the route to the Jetson
+    image: str | None = None  # e.g. "northstar-cv:jetpack6"; None runs it natively
     frame_port: int = 5600
     uart_port: int = 5760
     telemetry_port: int = 5800
+    name: str = "nssim-cv"  # the container's, so stop() can find it
 
     def __post_init__(self):
         if self.harness_host is None:
-            self.harness_host = local_address_towards(self.host.rsplit("@", 1)[-1])
+            self.harness_host = local_address_towards(ssh_hostname(self.host))
 
     def _ssh(self, remote: str) -> list[str]:
         return ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", "-o", "ServerAliveInterval=5", self.host, remote]
 
     def command(self) -> list[str]:
         inner = cv_command(self.harness_host, self.build_dir, self.frame_port, self.uart_port, self.telemetry_port)
-        return self._ssh(f"cd {self.cv_dir} && {inner}")
+        if self.image is None:
+            return self._ssh(f"cd {self.cv_dir} && {inner}")
+        # As scripts/dev.sh runs it: the checkout at /ws and the GPU. Host networking spares the
+        # CV's connections back to this machine Docker's NAT.
+        return self._ssh(
+            f'cd {self.cv_dir} && exec docker run --rm --name {self.name} --gpus all --network host '
+            f'-v "$PWD":/ws -w /ws {self.image} bash -lc {shlex.quote(inner)}'
+        )
 
     def start(self, log_path: Path) -> subprocess.Popen:
         self.stop()  # a leftover run (e.g. after a crash here) would hold the PTY
@@ -104,8 +129,11 @@ class CvRemote:
         return subprocess.Popen(self.command(), stdout=log, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL)
 
     def stop(self) -> None:
-        # Patterns written so they don't match this pkill's own command line.
+        if self.image is None:
+            # Patterns written so they don't match this pkill's own command line.
+            remote = "pkill -f '[N]orthstarCV2 --sim'; pkill -f '[s]ocat PTY,link=/tmp/ttySIM'; true"
+        else:
+            remote = f"docker rm -f {self.name} >/dev/null 2>&1; true"
         subprocess.run(
-            self._ssh("pkill -f '[N]orthstarCV2 --sim'; pkill -f '[s]ocat PTY,link=/tmp/ttySIM'; true"),
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL,
+            self._ssh(remote), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL,
         )

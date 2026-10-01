@@ -174,9 +174,15 @@ def _launcher(args, cv_dir: Path):
     from nssim.cv_launcher import CvContainer, CvRemote
 
     if args.jetson:
-        remote = CvRemote(host=args.jetson, cv_dir=args.jetson_dir, build_dir=args.jetson_build,
-                          harness_host=args.harness_ip)
-        print(f"[nssim] Northstar-CV on {args.jetson} will connect back to {remote.harness_host}", flush=True)
+        build_dir = args.jetson_build
+        if build_dir is None:
+            # Where scripts/dev.sh builds: JetPack 6's container has build/jetpack6 as its build/.
+            build_dir = "build/jetpack6" if args.jetson_image and args.jetson_image.endswith(":jetpack6") else "build"
+        remote = CvRemote(host=args.jetson, cv_dir=args.jetson_dir, build_dir=build_dir,
+                          harness_host=args.harness_ip, image=args.jetson_image)
+        where = f"in {args.jetson_image} " if args.jetson_image else ""
+        print(f"[nssim] Northstar-CV ({args.jetson_dir}/{build_dir}) runs {where}on {args.jetson} and connects "
+              f"back to {remote.harness_host}", flush=True)
         return remote
 
     from nssim.cv_build import TOOLCHAINS, binary_path, image_exists
@@ -248,9 +254,15 @@ def main(argv=None) -> None:
     loop = common.add_argument_group("Northstar-CV")
     loop.add_argument("--cv-dir", help="Northstar-CV checkout the constants are read from, and that runs in "
                       "Docker (default: the external/Northstar-CV submodule)")
-    loop.add_argument("--jetson", metavar="USER@HOST", help="run Northstar-CV on the Jetson over SSH instead of Docker")
+    loop.add_argument("--jetson", metavar="USER@HOST",
+                      help="run Northstar-CV on the Jetson over SSH instead of Docker here (or a Host from ~/.ssh/config)")
     loop.add_argument("--jetson-dir", default="~/Northstar-CV", help="its Northstar-CV checkout on the Jetson")
-    loop.add_argument("--jetson-build", default="build", help="its build directory, relative to --jetson-dir")
+    loop.add_argument("--jetson-image", metavar="IMAGE",
+                      help="run it in this Docker image on the Jetson, the one its scripts/dev.sh builds "
+                      "(northstar-cv:jetpack6 or northstar-cv:jetpack7); without it, natively")
+    loop.add_argument("--jetson-build",
+                      help="its build directory, relative to --jetson-dir (default: build, or build/jetpack6 "
+                      "with --jetson-image northstar-cv:jetpack6, where scripts/dev.sh builds)")
     loop.add_argument("--harness-ip", help="this machine's address as the Jetson sees it (default: detected)")
     loop.add_argument("--no-launch", action="store_true", help="don't start Northstar-CV (it's started by hand)")
     loop.add_argument("--jetpack", type=int, choices=[6, 7], default=7,
