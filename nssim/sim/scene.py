@@ -209,7 +209,7 @@ class ArenaScene:
         try:
             self.camera.take_picture()
         except RuntimeError as e:
-            # e.g. ErrorOutOfPoolMemory on Intel integrated graphics, which starts the renderer fine
+            # e.g. ErrorOutOfPoolMemory on Intel's UHD 770, which starts the renderer fine
             raise RuntimeError(
                 f"SAPIEN couldn't render on {self.gpu}: {e}\n"
                 f"Set {RENDER_DEVICE_ENV}=cuda to use an NVIDIA GPU, if this machine has one."
