@@ -37,16 +37,17 @@ Linux: the same with `python3.11 -m venv .venv` and `.venv/bin/` in place of `.v
 `--recursive` also fetches Northstar-CV's particle-filter library, which only a machine that builds
 Northstar-CV needs; `git submodule update --init` without it is enough otherwise.
 
-`nssim build-cv` builds two Docker images the first time: `northstar-cv:dev` from Northstar-CV's
-own `.devcontainer/Dockerfile` (the CUDA dev image, about 15 GB), and `northstar-cv:sim` on top
-of it, which adds socat. It then compiles Northstar-CV inside them into
-`external/Northstar-CV/build/sim-x86`, for your GPU and the Orin's (sm_87). Run it again
-whenever Northstar-CV changes.
+`nssim build-cv` builds Northstar-CV's own dev container (`.devcontainer/Dockerfile`, the image
+`scripts/dev.sh` uses, about 15 GB the first time) as `northstar-cv:jetpack7`, and
+`northstar-cv:sim-jetpack7` on top of it, which adds socat. It then compiles Northstar-CV inside
+them into `external/Northstar-CV/build/sim-jetpack7`, for your GPU and the Orin's (sm_87). Run it
+again whenever Northstar-CV changes; the images are only rebuilt when the Dockerfile changes, or
+from scratch with `--rebuild-images`.
 
-The robot may run JetPack 6 (CUDA 12.6, Ubuntu 22.04) or JetPack 7 (CUDA 13), and the
-`sim-harness` branch builds on both. The default above is JetPack 7's toolchain; to build and run
-with JetPack 6's instead (image `northstar-cv:jp6` from `docker/cv-jp6.Dockerfile`, build in
-`build/sim-jp6`):
+The robot may run JetPack 6 (CUDA 12.6, Ubuntu 22.04) or JetPack 7 (CUDA 13.2, Ubuntu 24.04), and
+the `sim-harness` branch builds on both. The dev container has a build of each, and the default
+above is JetPack 7's; to build and run with JetPack 6's instead (images `northstar-cv:jetpack6`
+and `northstar-cv:sim-jetpack6`, build in `build/sim-jetpack6`):
 
 ```powershell
 .venv\Scripts\nssim build-cv --jetpack 6

@@ -236,9 +236,11 @@ def main(argv=None) -> None:
     bc = sub.add_parser("build-cv", help="build the Docker images and Northstar-CV's simulator binary")
     bc.add_argument("--cv-dir", help="Northstar-CV checkout (default: the external/Northstar-CV submodule)")
     bc.add_argument("--cuda-arch", help="CUDA compute capability to build for, e.g. 89 (default: this machine's GPU)")
-    bc.add_argument("--rebuild-images", action="store_true", help="rebuild the Docker images even if they exist")
+    bc.add_argument("--rebuild-images", action="store_true",
+                    help="rebuild the Docker images from scratch (latest base image and packages)")
     bc.add_argument("--jetpack", type=int, choices=[6, 7], default=7,
-                    help="toolchain: 7 = CUDA 13 (default), 6 = CUDA 12.6 on Ubuntu 22.04")
+                    help="toolchain of Northstar-CV's dev container: 7 = CUDA 13.2 on Ubuntu 24.04 (default), "
+                    "6 = CUDA 12.6 on Ubuntu 22.04")
     bc.set_defaults(func=cmd_build_cv)
 
     # Options for anything that runs Northstar-CV in the loop.

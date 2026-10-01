@@ -40,6 +40,6 @@ include = ["nssim*"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 markers = [
-    "docker: needs Docker and the northstar-cv:dev image (Linux-only C++ conformance tests)",
+    "docker: needs Docker and the northstar-cv:jetpack7 image (Linux-only C++ conformance tests)",
     "sim: needs SAPIEN and a Vulkan device",
 ]

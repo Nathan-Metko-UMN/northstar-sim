@@ -11,6 +11,8 @@ import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
+from nssim.cv_build import TOOLCHAINS
+
 
 def cv_command(harness_host: str, build_dir: str, frame_port: int, uart_port: int, telemetry_port: int) -> str:
     """The shell command that runs Northstar-CV against the harness, from its repo root."""
@@ -37,8 +39,8 @@ class CvContainer:
     """Northstar-CV in Docker on this machine (Docker Desktop stands in for the Jetson)."""
 
     cv_dir: Path
-    image: str = "northstar-cv:sim"
-    build_dir: str = "build/sim-x86"
+    image: str = TOOLCHAINS[7].image
+    build_dir: str = TOOLCHAINS[7].build_dir
     harness_host: str = "host.docker.internal"
     frame_port: int = 5600
     uart_port: int = 5760
