@@ -56,7 +56,7 @@ def _runner(cfg, cv_dir: Path, out_dir: Path):
 def cmd_build_cv(args) -> None:
     from nssim.cv_build import build
 
-    binary = build(_cv_dir(args.cv_dir), cuda_arch=args.cuda_arch, rebuild_images=args.rebuild_images)
+    binary = build(_cv_dir(args.cv_dir), jetpack=args.jetpack, cuda_arch=args.cuda_arch, rebuild_images=args.rebuild_images)
     print(f"[nssim] built {binary}")
 
 
@@ -179,13 +179,17 @@ def _launcher(args, cv_dir: Path):
         print(f"[nssim] Northstar-CV on {args.jetson} will connect back to {remote.harness_host}", flush=True)
         return remote
 
-    from nssim.cv_build import binary_path, image_exists
+    from nssim.cv_build import TOOLCHAINS, binary_path, image_exists
 
-    if not binary_path(cv_dir, args.build_dir).is_file():
-        sys.exit(f"no simulator build of Northstar-CV in {cv_dir / args.build_dir}; run `nssim build-cv` first")
-    if not image_exists(args.image):
-        sys.exit(f"Docker image {args.image} not found; run `nssim build-cv` first")
-    return CvContainer(cv_dir=cv_dir, image=args.image, build_dir=args.build_dir)
+    toolchain = TOOLCHAINS[args.jetpack]
+    image = args.image or toolchain.image
+    build_dir = args.build_dir or toolchain.build_dir
+    jetpack_flag = "" if args.jetpack == 7 else f" --jetpack {args.jetpack}"
+    if not binary_path(cv_dir, build_dir).is_file():
+        sys.exit(f"no simulator build of Northstar-CV in {cv_dir / build_dir}; run `nssim build-cv{jetpack_flag}` first")
+    if not image_exists(image):
+        sys.exit(f"Docker image {image} not found; run `nssim build-cv{jetpack_flag}` first")
+    return CvContainer(cv_dir=cv_dir, image=image, build_dir=build_dir)
 
 
 def cmd_eval(args) -> None:
@@ -233,6 +237,8 @@ def main(argv=None) -> None:
     bc.add_argument("--cv-dir", help="Northstar-CV checkout (default: the external/Northstar-CV submodule)")
     bc.add_argument("--cuda-arch", help="CUDA compute capability to build for, e.g. 89 (default: this machine's GPU)")
     bc.add_argument("--rebuild-images", action="store_true", help="rebuild the Docker images even if they exist")
+    bc.add_argument("--jetpack", type=int, choices=[6, 7], default=7,
+                    help="toolchain: 7 = CUDA 13 (default), 6 = CUDA 12.6 on Ubuntu 22.04")
     bc.set_defaults(func=cmd_build_cv)
 
     # Options for anything that runs Northstar-CV in the loop.
@@ -245,8 +251,10 @@ def main(argv=None) -> None:
     loop.add_argument("--jetson-build", default="build", help="its build directory, relative to --jetson-dir")
     loop.add_argument("--harness-ip", help="this machine's address as the Jetson sees it (default: detected)")
     loop.add_argument("--no-launch", action="store_true", help="don't start Northstar-CV (it's started by hand)")
-    loop.add_argument("--image", default="northstar-cv:sim", help="Docker image (without --jetson)")
-    loop.add_argument("--build-dir", default="build/sim-x86", help="build directory in --cv-dir (without --jetson)")
+    loop.add_argument("--jetpack", type=int, choices=[6, 7], default=7,
+                      help="which `nssim build-cv --jetpack` build runs in Docker (default 7)")
+    loop.add_argument("--image", help="Docker image (default: the --jetpack toolchain's)")
+    loop.add_argument("--build-dir", help="build directory in --cv-dir (default: the --jetpack toolchain's)")
     loop.add_argument("--no-compress", action="store_true", help="send raw Bayer frames (fast wired links)")
     loop.add_argument("--plate-height", type=float, metavar="M",
                       help="build the enemies with this plate height offset (default 0.03, what Northstar-CV "

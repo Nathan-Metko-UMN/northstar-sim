@@ -1,21 +1,42 @@
 """Builds Northstar-CV's simulator binary in Docker, the local stand-in for the Jetson.
 
-Two images: ``northstar-cv:dev`` from Northstar-CV's own ``.devcontainer/Dockerfile``, and
-``northstar-cv:sim`` on top of it (adds socat, see ``docker/cv-sim.Dockerfile``). The binary is
-built inside the image into ``<Northstar-CV>/build/sim-x86``, which ``nssim run`` mounts and starts.
+There is a toolchain per JetPack, since the robot may run either:
+
+- JetPack 7 (CUDA 13): ``northstar-cv:dev`` from Northstar-CV's own ``.devcontainer/Dockerfile``,
+  and ``northstar-cv:sim`` on top of it (adds socat, see ``docker/cv-sim.Dockerfile``). Builds into
+  ``build/sim-x86``.
+- JetPack 6 (CUDA 12.6, Ubuntu 22.04): ``northstar-cv:jp6`` from ``docker/cv-jp6.Dockerfile``.
+  Builds into ``build/sim-jp6``.
+
+Both compile for this machine's GPU (to run in the sim) and the Orin's sm_87 (so the Jetson's code
+is checked too). ``nssim run`` mounts the build and starts it.
 """
 
 from __future__ import annotations
 
 import shutil
 import subprocess
+from dataclasses import dataclass
 from pathlib import Path
 
 from nssim.paths import REPO_ROOT
 
 DEV_IMAGE = "northstar-cv:dev"
-SIM_IMAGE = "northstar-cv:sim"
-BUILD_DIR = "build/sim-x86"
+ORIN_ARCH = "87"
+
+
+@dataclass(frozen=True)
+class Toolchain:
+    image: str  # what the binary is built and run in
+    build_dir: str  # inside the Northstar-CV checkout
+    what: str
+
+
+TOOLCHAINS = {
+    7: Toolchain("northstar-cv:sim", "build/sim-x86", "CUDA 13 (Northstar-CV's dev image), as on JetPack 7"),
+    6: Toolchain("northstar-cv:jp6", "build/sim-jp6", "CUDA 12.6 on Ubuntu 22.04, as on JetPack 6"),
+}
+BUILD_DIR = TOOLCHAINS[7].build_dir
 
 
 def image_exists(image: str) -> bool:
@@ -52,30 +73,42 @@ def missing_submodules(cv_dir: Path) -> list[str]:
     return [line.split()[1] for line in status.stdout.splitlines() if line.startswith("-")]
 
 
-def build(cv_dir: Path, cuda_arch: str | None = None, rebuild_images: bool = False, build_dir: str = BUILD_DIR) -> Path:
+def _ensure_images(jetpack: int, cv_dir: Path, rebuild: bool) -> None:
+    docker_dir = REPO_ROOT / "docker"
+    if jetpack == 6:
+        if rebuild or not image_exists(TOOLCHAINS[6].image):
+            _run(["docker", "build", "-t", TOOLCHAINS[6].image, "-f", str(docker_dir / "cv-jp6.Dockerfile"), str(docker_dir)])
+        return
+    if rebuild or not image_exists(DEV_IMAGE):
+        # The dev Dockerfile copies nothing in, so its own folder is enough context; the repo root
+        # would upload build/ and .ccache/ to the daemon for nothing.
+        devcontainer = cv_dir / ".devcontainer"
+        _run(["docker", "build", "-t", DEV_IMAGE, "-f", str(devcontainer / "Dockerfile"), str(devcontainer)])
+    if rebuild or not image_exists(TOOLCHAINS[7].image):
+        _run(["docker", "build", "-t", TOOLCHAINS[7].image, "--build-arg", f"BASE={DEV_IMAGE}",
+              "-f", str(docker_dir / "cv-sim.Dockerfile"), str(docker_dir)])
+
+
+def build(cv_dir: Path, jetpack: int = 7, cuda_arch: str | None = None, rebuild_images: bool = False) -> Path:
     cv_dir = Path(cv_dir).resolve()
+    toolchain = TOOLCHAINS[jetpack]
     missing = missing_submodules(cv_dir)
     if missing:
         raise SystemExit(
             f"Northstar-CV's submodules aren't checked out ({', '.join(missing)}); "
             "run `git submodule update --init --recursive`"
         )
-    if rebuild_images or not image_exists(DEV_IMAGE):
-        # The dev Dockerfile copies nothing in, so its own folder is enough context; the repo root
-        # would upload build/ and .ccache/ to the daemon for nothing.
-        devcontainer = cv_dir / ".devcontainer"
-        _run(["docker", "build", "-t", DEV_IMAGE, "-f", str(devcontainer / "Dockerfile"), str(devcontainer)])
-    if rebuild_images or not image_exists(SIM_IMAGE):
-        docker_dir = REPO_ROOT / "docker"
-        _run(["docker", "build", "-t", SIM_IMAGE, "--build-arg", f"BASE={DEV_IMAGE}",
-              "-f", str(docker_dir / "cv-sim.Dockerfile"), str(docker_dir)])
+    _ensure_images(jetpack, cv_dir, rebuild_images)
 
-    arch = cuda_arch or host_cuda_arch()
-    if arch is None:
-        raise SystemExit("couldn't read the GPU's compute capability from nvidia-smi; pass --cuda-arch (e.g. 89)")
+    if cuda_arch is None:
+        host = host_cuda_arch()
+        if host is None:
+            raise SystemExit("couldn't read the GPU's compute capability from nvidia-smi; pass --cuda-arch (e.g. 89)")
+        cuda_arch = ";".join(sorted({host, ORIN_ARCH}))
+    print(f"[nssim] building for JetPack {jetpack}: {toolchain.what}; CUDA archs {cuda_arch}", flush=True)
     script = (
-        f"cmake -S . -B {build_dir} -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_CUDA_ARCHITECTURES={arch}"
-        f" && cmake --build {build_dir}"
+        f"cmake -S . -B {toolchain.build_dir} -G Ninja -DCMAKE_BUILD_TYPE=Release '-DCMAKE_CUDA_ARCHITECTURES={cuda_arch}'"
+        f" && cmake --build {toolchain.build_dir}"
     )
-    _run(["docker", "run", "--rm", "-v", f"{cv_dir}:/ws", "-w", "/ws", SIM_IMAGE, "bash", "-lc", script])
-    return binary_path(cv_dir, build_dir)
+    _run(["docker", "run", "--rm", "-v", f"{cv_dir}:/ws", "-w", "/ws", toolchain.image, "bash", "-lc", script])
+    return binary_path(cv_dir, toolchain.build_dir)
