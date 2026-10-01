@@ -35,7 +35,9 @@ py -3.11 -m venv .venv
 
 Linux: the same with `python3.11 -m venv .venv` and `.venv/bin/` in place of `.venv\Scripts\`.
 `--recursive` also fetches Northstar-CV's particle-filter library, which only a machine that builds
-Northstar-CV needs; `git submodule update --init` without it is enough otherwise.
+Northstar-CV needs; `git submodule update --init` without it is enough otherwise. If a submodule's
+folder has only a `.git` file in it, its clone was cut short before the files were written, and a
+plain update won't notice; `git submodule update --init --force external/<name>` writes them.
 
 `nssim build-cv` builds Northstar-CV's own dev container (`.devcontainer/Dockerfile`, the image
 `scripts/dev.sh` uses, about 15 GB the first time) as `northstar-cv:jetpack7`, and

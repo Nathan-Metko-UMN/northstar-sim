@@ -24,5 +24,11 @@ def tr_dir(override: str | os.PathLike | None = None) -> Path:
 
 def missing_hint(path: Path, what: str, env: str) -> str:
     if path.parent == EXTERNAL:
+        if path.is_dir() and (path / ".git").exists() and all(p.name == ".git" for p in path.iterdir()):
+            # Cloned, but writing out its files failed or was cut short. The submodule is already at
+            # its commit, so a plain update does nothing; --force writes the files (or shows why not).
+            rel = path.relative_to(REPO_ROOT).as_posix()
+            return (f"{what}: the submodule at {path} was cloned but its files were never checked out; "
+                    f"run `git submodule update --init --force {rel}`")
         return f"{what} not found at {path}; run `git submodule update --init --recursive` (or set {env})"
     return f"{what} not found at {path} (check {env} / --cv-dir)"
