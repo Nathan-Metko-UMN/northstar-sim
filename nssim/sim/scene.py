@@ -71,6 +71,8 @@ STICKER_GLYPHS = {
 BAR_HALF_DEPTH = 0.002
 PANEL_BEHIND_BARS = 0.001  # gap between the panel face and the back of the bars
 SYMBOL_LIFT = 0.0002  # the rescaled sticker sits this far in front of TR's (hidden) one
+CHASSIS_ABOVE_CENTER = 0.07  # the chassis's top above the plate-ring center
+CHASSIS_FLOOR_GAP = 0.03  # and its bottom above the floor
 
 PANEL_GRAY = [0.02, 0.02, 0.02, 1.0]
 
@@ -115,11 +117,17 @@ class _TargetVisual:
             scene.add_entity(entity)
             self.panels.append(entity)
 
-        # Dark chassis inside the plate ring, so plates facing away don't show through.
+        # Dark chassis inside the plate ring, from just off the floor to above the plates: plates
+        # facing away don't show through, and up close, where the camera looks down past a plate's
+        # bottom edge, it sees the robot as on a real one rather than the floor. The number
+        # classifier's window reaches a little below the plate, and the gray floor there reads as
+        # part of the glyph ("negative" for the 1 and the sentry icon within ~1.5 m).
         r = 0.6 * min(spec.radius_high, spec.radius_low)
+        top, bottom = CHASSIS_ABOVE_CENTER, spec.center_height - CHASSIS_FLOOR_GAP  # from the ring center
         material = sapien.render.RenderMaterial(base_color=[0.08, 0.08, 0.08, 1.0], roughness=0.9)
         builder = scene.create_actor_builder()
-        builder.add_box_visual(half_size=[r, r, 0.07], material=material)
+        builder.add_box_visual(pose=sapien.Pose([0.0, 0.0, (top - bottom) / 2]),
+                               half_size=[r, r, (top + bottom) / 2], material=material)
         self.chassis = builder.build_kinematic(name=f"{spec.name}_chassis")
 
     @staticmethod

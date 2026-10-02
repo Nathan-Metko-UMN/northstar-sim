@@ -70,7 +70,22 @@ Northstar-CV itself was tuned on:
   by those fractions of the face. TR's glyphs have DJI's shapes (width per height within 2%) but
   are smaller: the 3 needs 1.135x, the sentry icon 1.03x, the 1 1.02x. The earlier uniform
   1.25x, the middle of the range in which the classifier is confident on the 3 (1.1x to 1.6x;
-  it rejects below 1.05x), made all three too big, the 1 and the sentry icon by about 20%.
+  it rejects below 1.05x), made all three too big, the 1 and the sentry icon by about 20%. Run
+  offline on rendered plates, the classifier reads all three alike from 0.9x to 1.3x of DJI's
+  size, so the size isn't critical; TR's glyphs also fill their boxes as DJI's do (the 3 52%,
+  the 1 56%, the sentry outline only 26%).
+- **Robot body**: a dark box inside the plate ring, from 3 cm off the floor to 7 cm above the
+  plate centers. The classifier's window (28 px for 133 mm, centered a little low on the light
+  bars) reaches below a plate's bottom edge. When the box stopped 13 cm off the floor, the camera
+  looked down past the plate onto the gray floor from closer than about 2 m, the threshold made
+  that strip part of the glyph, and the 1 and the sentry icon read as "negative" (recall 0.00 at
+  1.5 m; 0.47 and 0.65 with the full box, the 3 0.92 either way).
+- **Hero and sentry fall off with angle sooner than the 3** (3 m spinning: the 3 is kept 91% at
+  40-60 degrees of incidence, the sentry 49%, the hero 0%). That is the CV, not the sim: it calls
+  a pair of bars a large plate from their spacing per length, and beyond about 35 degrees a large
+  plate's bars are as close as a small one's head on, so a hero plate is treated as small and its
+  1 rejected ("wrong plate size") or warped to the small shape and read as negative. The sentry's
+  thin outline blurs away sooner than the 3's strokes once the plate turns.
 
 Results with these settings: recall 100% below 40° incidence, 87–96% at 40–60°, 62% at 60–70°;
 no misread numbers; corner error ~1 px.
