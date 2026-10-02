@@ -38,9 +38,13 @@ def _apply_common(cfg, args):
     """run / drive options that change the scenario itself."""
     if getattr(args, "no_compress", False):
         cfg.compress_frames = False
-    if getattr(args, "plate_height", None) is not None:
-        for target in cfg.targets:
+    for target in cfg.targets:
+        if getattr(args, "plate_height", None) is not None:
             target.spec.z_offset = args.plate_height
+        if getattr(args, "radius", None) is not None:
+            target.spec.radius_high = target.spec.radius_low = args.radius
+        if getattr(args, "radius_low", None) is not None:
+            target.spec.radius_low = args.radius_low
     return cfg
 
 
@@ -235,6 +239,18 @@ def cmd_frame(args) -> None:
     print(f"[nssim] wrote {out}")
 
 
+def _add_enemy_options(parser) -> None:
+    """How the enemies are built (see _apply_common)."""
+    parser.add_argument("--plate-height", type=float, metavar="M",
+                        help="build the enemies with this plate height offset (default 0.03, what Northstar-CV "
+                        "assumes for CU); try another team's value to see the filter cope")
+    parser.add_argument("--radius", type=float, metavar="M",
+                        help="build the enemies with this radius, from their center to each plate (default 0.25; "
+                        "drive's hero 0.3)")
+    parser.add_argument("--radius-low", type=float, metavar="M",
+                        help="a different radius for the low pair of plates (1 and 3), as on robots that aren't square")
+
+
 def main(argv=None) -> None:
     parser = argparse.ArgumentParser(prog="nssim", description=__doc__)
     sub = parser.add_subparsers(dest="cmd", required=True)
@@ -270,9 +286,7 @@ def main(argv=None) -> None:
     loop.add_argument("--image", help="Docker image (default: the --jetpack toolchain's)")
     loop.add_argument("--build-dir", help="build directory in --cv-dir (default: the --jetpack toolchain's)")
     loop.add_argument("--no-compress", action="store_true", help="send raw Bayer frames (fast wired links)")
-    loop.add_argument("--plate-height", type=float, metavar="M",
-                      help="build the enemies with this plate height offset (default 0.03, what Northstar-CV "
-                      "assumes for CU); try another team's value to see the filter cope")
+    _add_enemy_options(loop)
     loop.add_argument("--out", help="run directory (default: runs/<time>_<scenario>)")
     loop.add_argument("--dashboard", action="store_true", help="serve a live dashboard to browsers (any device)")
     loop.add_argument("--dashboard-port", type=int, default=8050, metavar="PORT")
@@ -312,6 +326,7 @@ def main(argv=None) -> None:
     pv.add_argument("--time", type=float, default=0.0)
     pv.add_argument("--cv-dir")
     pv.add_argument("--out")
+    _add_enemy_options(pv)
     pv.set_defaults(func=cmd_preview)
 
     fr = sub.add_parser("frame", help="re-render a logged frame with ground truth and detections")

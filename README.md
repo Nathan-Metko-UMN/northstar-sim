@@ -291,7 +291,11 @@ compensation and the filter's dt are what they would be on the robot.
   Northstar-CV debayers the frame itself, as on the robot.
 - **Our robot.** Turret geometry is read from Northstar-CV's `src/constants.hpp`.
 - **Enemies.** Four plates 90 degrees apart, high pair at +z_offset (the particle filter's
-  model), 15 degree tilt, scripted translation/strafe/spin.
+  model), 15 degree tilt, scripted translation/strafe/spin. Their size is `TargetSpec` in
+  `nssim/sim/targets.py` (per enemy in `nssim/scenarios.py`): `radius_high`/`radius_low` from the
+  center to each pair of plates (0.25 m), `z_offset` (0.03 m), `center_height` (0.20 m) and
+  `tilt_deg`; the plate size comes from the panel (small for infantry and sentry, large for the
+  hero). `--radius`, `--radius-low` and `--plate-height` set them for a run without editing code.
 - **MCB.** The UART protocol, send periods, robot-ID timer, ALIVE timeout and fire-gate
   tolerance of northstar-robomaster `main`. The turret is a placeholder second-order model
   for now; the firmware's cascade PID comes next.
