@@ -122,6 +122,14 @@ class TrAssets:
         """The number/icon sticker of a panel (unscaled mesh coordinates)."""
         return self._parts(kind)[PANEL_MODELS[kind].symbol]
 
+    def panel_face(self, kind: str) -> tuple[np.ndarray, np.ndarray]:
+        """x-y bounds (min, max) of the panel body's front face, where the sticker goes (unscaled
+        mesh coordinates). Its outline is the sticker's: 1.085 wide per high on small panels, as
+        on DJI's reference stickers."""
+        body = self._parts(kind)[PANEL_MODELS[kind].body].vertices
+        face = body[body[:, 2] > body[:, 2].max() - 0.0005]
+        return face[:, :2].min(axis=0).astype(np.float64), face[:, :2].max(axis=0).astype(np.float64)
+
     def _parts(self, kind: str) -> list[MeshPart]:
         if kind not in self._part_cache:
             import sapien

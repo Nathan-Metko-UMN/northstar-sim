@@ -40,10 +40,28 @@ class Appearance:
         default_factory=lambda: {"blue": [0.3, 0.75, 1.0], "red": [1.0, 0.3, 0.18]}
     )
     bar_emission: float = 1.2
-    # TR's sticker digits are smaller than the real ones. Northstar-CV's number classifier is
-    # confident on sim crops for digits 1.1x to 1.6x TR's size (and rejects them below 1.05x);
-    # 1.25x sits in that range and still fits on the panel. See NOTES.md.
-    symbol_scale: float = 1.25
+    # The sticker glyphs are sized and placed as on DJI's reference stickers (STICKER_GLYPHS);
+    # this scales them from there, to see how the classifier copes with other sizes.
+    glyph_scale: float = 1.0
+
+
+@dataclass(frozen=True)
+class StickerGlyph:
+    """A glyph on DJI's reference sticker (RoboMaster 2026 rules, Appendix II), which covers the
+    panel's front face: its bounding box's height as a fraction of the sticker's, and its center's
+    offset from the sticker's center as fractions of the sticker's width and height (x right, y up)."""
+
+    height: float
+    offset: tuple[float, float]
+
+
+# Measured from DJI's drawings. TR's glyphs have the same shapes (width per height within 2%), so
+# only their size and place change: TR's are 0.71-0.78 of the sticker's height, against these.
+STICKER_GLYPHS = {
+    "infantry": StickerGlyph(0.841, (-0.001, -0.002)),  # the 3
+    "sentry": StickerGlyph(0.700, (-0.001, 0.001)),
+    "hero": StickerGlyph(0.815, (-0.028, -0.006)),  # the 1, its flag off to the left
+}
 
 
 # Light bars as boxes in the plate frame. TR's panel meshes recess the bars behind the panel rim,
@@ -73,7 +91,7 @@ class _TargetVisual:
         color = look.bar_colors[spec.color]
         bar_material = sapien.render.RenderMaterial(base_color=[*color, 1.0], emission=[*color, look.bar_emission])
         symbol_material = sapien.render.RenderMaterial(base_color=[1.0, 1.0, 1.0, 1.0])
-        symbol = _scaled_symbol(assets, spec.panel, geometry.scale, look.symbol_scale)
+        symbol = _scaled_symbol(assets, spec.panel, geometry.scale, look.glyph_scale)
 
         self.panels = []
         for i in range(4):
@@ -121,18 +139,24 @@ class _TargetVisual:
         self.chassis.set_pose(sapien.Pose(state.center.tolist(), _yaw_quat(state.spin)))
 
 
-def _scaled_symbol(assets: TrAssets, kind: str, panel_scale, symbol_scale: float):
-    """TR's sticker mesh with the panel's scale, enlarged about its center and lifted off the panel.
+def _scaled_symbol(assets: TrAssets, kind: str, panel_scale, glyph_scale: float = 1.0):
+    """TR's sticker mesh at the panel's scale, resized and moved to where DJI's reference sticker
+    has the glyph (STICKER_GLYPHS), and lifted off the panel.
 
     Returns (vertices, triangles, normals, uvs) for RenderShapeTriangleMesh.
     """
     part = assets.symbol_mesh(kind)
     scale = np.asarray(panel_scale, np.float64)
     v = part.vertices.astype(np.float64) * scale
-    center = (v.min(axis=0) + v.max(axis=0)) / 2
-    k = np.array([symbol_scale, symbol_scale, 1.0])
-    v = center + (v - center) * k
+    face_min, face_max = (b * scale[:2] for b in assets.panel_face(kind))
+    face_size = face_max - face_min
+    glyph = STICKER_GLYPHS[kind]
+    lo, hi = v[:, :2].min(axis=0), v[:, :2].max(axis=0)
+    s = glyph_scale * glyph.height * face_size[1] / (hi[1] - lo[1])
+    target = (face_min + face_max) / 2 + np.asarray(glyph.offset) * face_size
+    v[:, :2] = target + (v[:, :2] - (lo + hi) / 2) * s
     v[:, 2] += SYMBOL_LIFT
+    k = np.array([s, s, 1.0])
     n = part.normals.astype(np.float64) / (scale * k)  # normals transform by the inverse scale
     n /= np.maximum(np.linalg.norm(n, axis=1, keepdims=True), 1e-12)
     return v.astype(np.float32), part.triangles, n.astype(np.float32), part.uvs

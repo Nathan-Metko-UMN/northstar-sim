@@ -61,10 +61,16 @@ Northstar-CV itself was tuned on:
 - **Lens**: Gaussian PSF σ = 0.7 px and a glare halo (σ = 2 px, 35% of saturated light, added in
   linear light) before the Bayer mosaic. Without them a 5 mm pure-blue bar could put all of its
   blue in one column of Bayer blue sites and vanish after debayering (the thin-bar drop above).
-- **Sticker size**: TR's digits enlarged 1.25x. The classifier is confident from 1.1x to 1.6x
-  TR's size and rejects below 1.05x; since it was trained on real stickers seen through this
-  detector, that plateau is the best available estimate of the real digit size. 1.25x still fits
-  on the panel. Replace with measured sticker dimensions when available.
+- **Sticker size**: from DJI's reference stickers (RoboMaster 2026 rules, Appendix II). Measured
+  on the drawings, each glyph's bounding box is this fraction of the sticker's height (and width):
+  the 3 0.841 (0.480), the hero's 1 0.815 (0.193), the sentry icon 0.700 (0.715), the 2 0.833
+  (0.497), the 4 0.820 (0.601), the outpost icon 0.775 (0.474); all centered but the 1, whose
+  flag puts its box 0.028 of the width left. The sticker covers the panel's front face (1.085
+  wide per high on TR's small panels, as on DJI's), so the harness sizes and places TR's glyphs
+  by those fractions of the face. TR's glyphs have DJI's shapes (width per height within 2%) but
+  are smaller: the 3 needs 1.135x, the sentry icon 1.03x, the 1 1.02x. The earlier uniform
+  1.25x, the middle of the range in which the classifier is confident on the 3 (1.1x to 1.6x;
+  it rejects below 1.05x), made all three too big, the 1 and the sentry icon by about 20%.
 
 Results with these settings: recall 100% below 40° incidence, 87–96% at 40–60°, 62% at 60–70°;
 no misread numbers; corner error ~1 px.

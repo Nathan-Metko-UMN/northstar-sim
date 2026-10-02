@@ -282,9 +282,9 @@ compensation and the filter's dt are what they would be on the robot.
   poses come straight from scripted motion and the turret model, so ground truth is exact.
   Panels are scaled to the plate size Northstar-CV's PnP assumes (`src/pnp_solver.hpp`).
 - **Armor plates.** Light bars at TR's CAD size, in the colors a color camera records for the
-  LEDs (cyan-white for blue, orange-red for red). TR's sticker digits are enlarged 1.25x, the
-  middle of the range Northstar-CV's number classifier accepts; real stickers should be
-  checked against this.
+  LEDs (cyan-white for blue, orange-red for red). The sticker glyphs (TR's 3, hero 1 and sentry
+  icon) are sized and placed as on DJI's reference stickers (RoboMaster 2026 rules, Appendix II;
+  `STICKER_GLYPHS` in `nssim/sim/scene.py`).
 - **Camera.** The Triton2 TRT016S-CC (1440x1080, BayerRG8) with the 6 mm lens's nominal
   intrinsics (fx = fy = 1739 px) until the real lens is calibrated. Lens blur and glare around
   the light bars are applied before the Bayer mosaic (`nssim/camera/optics.py`), and
