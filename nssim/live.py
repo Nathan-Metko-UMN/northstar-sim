@@ -317,7 +317,8 @@ class LiveSession:
             off = np.linalg.norm(np.asarray(state["center"][:2]) + runner.shooter.base_xyz[:2] - true.center[:2])
             lines += [
                 f"filter spin {state['omega']:+.1f} rad/s (true {true.omega:+.1f})"
-                f"   radius {state['radius']:.2f} m (true {(spec.radius_high + spec.radius_low) / 2:.2f})",
+                f"   radius high {state['radius_0']:.2f} m (true {spec.radius_high / 2:.2f})",
+                f"   radius low {state['radius_1']:.2f} m (true {spec.radius_low / 2:.2f})",
                 f"       center off by {100 * off:.0f} cm",
             ]
         else:

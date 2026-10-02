@@ -95,19 +95,23 @@ def frame_errors(frame: dict, det: dict | None, track: dict | None) -> dict:
         # The enemy the filter is on (a run can have several): the true center nearest its estimate.
         target = min(gt["targets"], key=lambda tg: np.linalg.norm(np.asarray(tg["center_base"])[:2] - center[:2]))
         true_center = np.asarray(target["center_base"])
-        true_radius = 0.5 * (target["radius_high"] + target["radius_low"])
+        true_radius_high = target["radius_high"]
+        true_radius_low = target["radius_low"]
         out["filter"] = {
             "target": target["name"],
             "center_xy_m": float(np.linalg.norm(center[:2] - true_center[:2])),
             "center_z_m": float(center[2] - true_center[2]),
             "velocity_mps": float(np.linalg.norm(np.asarray(state["center_velocity"]) - np.asarray(target["velocity"]))),
-            "radius_m": float(state["radius"] - true_radius),
+            "radius_high_m": float(state["radius_0"] - true_radius_high),
+            "radius_low_m": float(state["radius_1"] - true_radius_low),
             "omega_radps": float(state["omega"] - target["omega"]),
             "orientation_rad": float(wrap(state["orientation"] - target["spin"], math.pi)),
             # What the errors are relative to, for plotting estimate against truth.
             "omega": float(state["omega"]),
             "true_omega": float(target["omega"]),
-            "radius": float(state["radius"]),
-            "true_radius": float(true_radius),
+            "radius_high": float(state["radius_0"]),
+            "radius_low": float(state["radius_1"]),
+            "true_radius_high": float(true_radius_high),
+            "true_radius_low": float(true_radius_low),
         }
     return out

@@ -54,7 +54,7 @@ def _drive_lineup() -> list[tuple[TargetSpec, tuple[float, float]]]:
     """Opponents like TR's, which carry infantry, hero or sentry panels: those are the stickers TR
     modeled (the digit 3, the digit 1 on large plates, the sentry icon). Offsets from the first."""
     return [
-        (TargetSpec(name="infantry", panel="infantry", number="3"), (0.0, 0.0)),
+        (TargetSpec(name="infantry", panel="infantry", number="3", radius_high=0.25, radius_low=0.4), (0.0, 0.0)),
         (TargetSpec(name="hero", panel="hero", number="1", radius_high=0.3, radius_low=0.3), (0.9, -1.3)),
         (TargetSpec(name="sentry", panel="sentry", number="guard"), (0.6, 1.3)),
     ]
