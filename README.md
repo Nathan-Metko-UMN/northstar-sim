@@ -273,6 +273,15 @@ pipeline at the full 166 fps camera rate. Time is the MCB clock:
 3. Northstar-CV acks with how long it really took; its aim command reaches the virtual MCB at
    arrival + processing + UART time, and the turret moves from then on.
 
+With `--jetson` the run is pipelined: while Northstar-CV works on one frame, the sim renders the
+next, and it collects the ack only when that next frame is due. The laptop's render and the trip
+over the network then overlap the Jetson's processing instead of adding to it. The catch: if
+Northstar-CV answers within about one frame period, sim time has already gone past the moment its
+aim was due, so the aim is applied late. Each frame records by how much (`aim_late_us` in
+`frames.jsonl`), and the run's `done` event counts them. `--no-pipeline` waits for every ack, and
+`--pipeline` turns it on for Docker here (off by default there, as rendering at the same time
+would slow Northstar-CV down and skew the processing times it reports).
+
 Northstar-CV runs on the MCB clock in this mode (`src/sim/sim_clock.hpp`), so latency
 compensation and the filter's dt are what they would be on the robot.
 

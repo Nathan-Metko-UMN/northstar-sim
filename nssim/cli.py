@@ -38,6 +38,10 @@ def _apply_common(cfg, args):
     """run / drive options that change the scenario itself."""
     if getattr(args, "no_compress", False):
         cfg.compress_frames = False
+    # Rendering while a local container processes would slow it down and skew the processing
+    # times it reports, so by default only a Jetson gets the next frame rendered in the meantime.
+    pipeline = getattr(args, "pipeline", None)
+    cfg.pipeline = bool(getattr(args, "jetson", None)) if pipeline is None else pipeline
     if getattr(args, "plate_height", None) is not None:
         for target in cfg.targets:
             target.spec.z_offset = args.plate_height
@@ -270,6 +274,9 @@ def main(argv=None) -> None:
     loop.add_argument("--image", help="Docker image (default: the --jetpack toolchain's)")
     loop.add_argument("--build-dir", help="build directory in --cv-dir (default: the --jetpack toolchain's)")
     loop.add_argument("--no-compress", action="store_true", help="send raw Bayer frames (fast wired links)")
+    loop.add_argument("--pipeline", action=argparse.BooleanOptionalAction,
+                      help="render the next frame while Northstar-CV processes this one; an aim that comes back "
+                      "within a frame period is then applied late (default: on with --jetson, off in Docker here)")
     loop.add_argument("--plate-height", type=float, metavar="M",
                       help="build the enemies with this plate height offset (default 0.03, what Northstar-CV "
                       "assumes for CU); try another team's value to see the filter cope")

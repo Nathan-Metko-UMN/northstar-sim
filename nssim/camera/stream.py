@@ -82,17 +82,22 @@ def pack_message(magic: bytes, body: bytes) -> bytes:
     return _PREFIX.pack(magic, len(body)) + body
 
 
+def encode_image(image, compress: bool = False) -> bytes:
+    """The frame's image bytes as they go on the wire (pack_frame's ``encoded``)."""
+    return deflate_parallel(image) if compress else bytes(image)
+
+
 def pack_frame(
     header: FrameHeader,
-    image: bytes | memoryview,
+    image: bytes | memoryview | None,
     oracle: dict | None = None,
     compress: bool = False,
+    encoded: bytes | None = None,
 ) -> bytes:
+    """``encoded``: the image already through encode_image() with this ``compress`` (``image`` unused)."""
+    data = encode_image(image, compress) if encoded is None else encoded
     if compress:
-        data = deflate_parallel(image)
         header.flags |= FLAG_ZLIB
-    else:
-        data = bytes(image)
     if oracle is not None:
         header.flags |= FLAG_ORACLE
     header.image_bytes = len(data)

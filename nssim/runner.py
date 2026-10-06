@@ -4,9 +4,15 @@ Time is the MCB clock in integer microseconds, advanced in fixed ticks. Per fram
 
 1. Render at mid-exposure and record ground truth for that instant.
 2. At the frame's arrival time (end of exposure + GigE transfer), deliver every UART byte that
-   has arrived by then, send the frame, and wait for Northstar-CV's ack.
+   has arrived by then and send the frame.
 3. The ack reports how long Northstar-CV really took. Its aim command reaches the MCB at
    arrival + processing + UART time, and the turret reacts from then on.
+
+Pipelined (the default), the sim doesn't wait for the ack in step 2: it simulates on and renders
+the next frame while Northstar-CV works, and collects the ack when that next frame is due. Sim time
+can then pass the moment the aim should have reached the MCB, if Northstar-CV took less than about
+a frame period; such an aim is applied at once, late, and the frame records by how much
+(``aim_late_us``). ``pipeline=False`` waits for every ack, which is never late.
 
 Before the first frame (while Northstar-CV starts up and waits for the robot ID) the virtual MCB
 runs in real time.
@@ -17,6 +23,7 @@ from __future__ import annotations
 import json
 import math
 import time
+from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Protocol
@@ -24,7 +31,7 @@ from typing import Protocol
 import numpy as np
 
 from nssim.camera import CameraModel, FrameHeader, FrameServer, LinkModel, Optics, apply_optics, mosaic_rggb
-from nssim.camera.stream import pack_frame
+from nssim.camera.stream import encode_image, pack_frame
 from nssim.mcb import McbConfig, TurretState, VirtualMcb
 from nssim.mcb.link import UartLink
 from nssim.mcb.turret import TurretConfig, TurretModel
@@ -80,6 +87,8 @@ class RunConfig:
     # Lossless zlib on the frame stream. Worth it where the link is slow (Docker Desktop's
     # host->container path manages ~15 MB/s); off for a real GigE link to the Jetson.
     compress_frames: bool = True
+    # Render the next frame while Northstar-CV processes this one (see the module docstring).
+    pipeline: bool = True
     connect_timeout_s: float = 300.0
     ack_timeout_s: float = 30.0
 
@@ -90,9 +99,22 @@ class _PendingFrame:
     capture_us: int
     render_us: int
     arrival_us: int
-    bayer: np.ndarray
+    bayer: np.ndarray | None  # None until _developed()
     gt: dict
     develop_ms: dict = field(default_factory=dict)  # wall time spent making the image
+    image: bytes | None = None  # the Bayer image as sent (compressed or not)
+    job: Future | None = None  # lens + Bayer + compression, on the develop thread
+
+
+@dataclass
+class _InFlight:
+    """A frame sent to Northstar-CV whose ack hasn't been collected yet."""
+
+    frame: _PendingFrame
+    image_bytes: int
+    aims_before: int
+    wall_sent: float  # perf_counter when the send returned
+    send_ms: float
 
 
 def frame_events(record: dict, yaw_offset, det: dict | None, track: dict | None) -> list[tuple[str, float, dict]]:
@@ -160,6 +182,7 @@ class Runner:
         self._pending_rx: list[tuple[int, Frame, bytes]] = []  # (apply at MCB us, frame, its bytes)
         self.bus = Bus()  # everything that happens, for the dashboard (see bus.py)
         self._aims_received = 0
+        self._late_aims = 0  # aims applied after they were due (pipelined)
         self.mcb_us = config.mcb.boot_offset_us
         self.base_velocity = np.zeros(2)  # our chassis, world xy (only nonzero when driven)
         self.latest: dict[str, dict] = {}  # newest telemetry message of each type
@@ -167,6 +190,9 @@ class Runner:
             name: open(self.out_dir / f"{name}.jsonl", "w")
             for name in ("frames", "telemetry", "events", "uart")
         }
+        # Lens, Bayer and compression run here while the main thread renders the next frame (they
+        # spend their time in OpenCV, numpy and zlib, which release the GIL). One thread: in order.
+        self._develop_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="develop")
 
     # --- setup -----------------------------------------------------------------------------
 
@@ -348,7 +374,27 @@ class Runner:
                 return True
         return False
 
-    def _deliver(self, frame: _PendingFrame) -> None:
+    def _develop(self, rgb: np.ndarray) -> tuple[np.ndarray, bytes, dict]:
+        """On the develop thread: what the sensor records of a render, and its bytes on the wire."""
+        w0 = time.perf_counter()
+        bayer = mosaic_rggb(apply_optics(rgb, self.config.optics))
+        w1 = time.perf_counter()
+        image = encode_image(bayer, self.config.compress_frames)
+        w2 = time.perf_counter()
+        return bayer, image, {"optics": (w1 - w0) * 1e3, "pack": (w2 - w1) * 1e3}
+
+    def _developed(self, frame: _PendingFrame) -> None:
+        """Wait for a frame's develop job, if it hasn't finished."""
+        if frame.job is None:
+            return
+        w0 = time.perf_counter()
+        frame.bayer, frame.image, ms = frame.job.result()
+        frame.develop_ms.update(ms, develop_wait=(time.perf_counter() - w0) * 1e3)
+        frame.job = None
+
+    def _send(self, frame: _PendingFrame) -> _InFlight:
+        """Hand a frame to Northstar-CV at its arrival time, without waiting for the ack."""
+        self._developed(frame)
         self.link.flush(frame.arrival_us)
         watermark = self.link.last_delivered_odometry_ts
         cam = self.config.camera
@@ -362,11 +408,15 @@ class Runner:
             odom_watermark_mcb_us=-1 if watermark is None else watermark,
         )
         aims_before = self._aims_received
-        wall_pack = time.perf_counter()
-        message = pack_frame(header, frame.bayer, compress=self.config.compress_frames)
         wall0 = time.perf_counter()
-        self.frames.send_packed(message)
+        self.frames.send_packed(pack_frame(header, None, compress=self.config.compress_frames, encoded=frame.image))
         wall_sent = time.perf_counter()
+        return _InFlight(frame, header.image_bytes, aims_before, wall_sent, send_ms=(wall_sent - wall0) * 1e3)
+
+    def _complete(self, sent: _InFlight) -> None:
+        """Wait for a sent frame's ack and aim, and schedule what the CV wrote for the MCB."""
+        frame = sent.frame
+        wall_wait = time.perf_counter()
         seq, processing_us = self.frames.recv_ack(timeout=self.config.ack_timeout_s)
         wall_ack = time.perf_counter()
         if seq != frame.seq:
@@ -375,18 +425,23 @@ class Runner:
         # The aim for this frame was written to the UART just before the ack; give socat a moment.
         rx = self._collect_rx()
         deadline = time.perf_counter() + 0.5
-        while self._aims_received == aims_before:
+        while self._aims_received == sent.aims_before:
             if not self.link.wait_readable(deadline - time.perf_counter()):
                 break
             rx += self._collect_rx()
         wall_aim = time.perf_counter()
         apply_base = frame.arrival_us + processing_us
         aim_us = None
+        aim_late_us = 0
         for rx_frame, data in rx:
-            apply_us = apply_base + int(len(data) * self.link.byte_us)
+            due_us = apply_base + int(len(data) * self.link.byte_us)
+            # Pipelined, sim time may already be past it; the loop applies it on the next tick.
+            apply_us = max(due_us, self.mcb_us)
             self._pending_rx.append((apply_us, rx_frame, data))
             if rx_frame.msg_type == MsgType.TURRET_AIM_DATA and aim_us is None:
                 aim_us = apply_us
+                aim_late_us = apply_us - due_us
+                self._late_aims += aim_late_us > 0
         self._drain_telemetry()
         record = {
                 "seq": frame.seq,
@@ -394,22 +449,28 @@ class Runner:
                 "render_us": frame.render_us,
                 "arrival_us": frame.arrival_us,
                 "processing_us": processing_us,
-                "wall_roundtrip_ms": (wall_ack - wall0) * 1e3,
-                "image_bytes": header.image_bytes,
+                # Send to ack. Pipelined, the ack may have waited while the next frame rendered.
+                "wall_roundtrip_ms": (wall_ack - sent.wall_sent) * 1e3,
+                "image_bytes": sent.image_bytes,
                 "wall_ms": {
-                    **frame.develop_ms,
-                    "pack": (wall0 - wall_pack) * 1e3,
-                    "send": (wall_sent - wall0) * 1e3,
-                    "ack": (wall_ack - wall_sent) * 1e3,
+                    **frame.develop_ms,  # optics and pack ran on the develop thread
+                    "send": sent.send_ms,
+                    "ack": (wall_ack - wall_wait) * 1e3,  # blocked waiting for it
                     "aim": (wall_aim - wall_ack) * 1e3,
                 },
-                "aim_received": self._aims_received > aims_before,
+                "aim_received": self._aims_received > sent.aims_before,
                 "aim_us": aim_us,  # when this frame's aim reached the MCB
+                "aim_late_us": aim_late_us,  # after it should have (pipelined, see the module docstring)
                 "gt": frame.gt,
         }
         self._log("frames", record)
         if self.bus.active:
             self._publish_frame(frame, record, aim_us)
+
+    def _finish(self, sent: _InFlight, hooks: RunHooks | None) -> None:
+        self._complete(sent)
+        if hooks is not None:
+            hooks.frame_delivered(self, sent.frame)
 
     def _publish_frame(self, frame: _PendingFrame, record: dict, aim_us: int | None) -> None:
         def this_frame(kind: str) -> dict | None:
@@ -445,6 +506,7 @@ class Runner:
             seq = 0
             next_render_us = t0_us + period_us - half_exposure
             pending: list[_PendingFrame] = []
+            in_flight: _InFlight | None = None
             frame_bytes = cfg.camera.width * cfg.camera.height
             end_us = t0_us + cfg.duration_s * 1e6  # float, so an infinite duration works
             wall_start = time.perf_counter()
@@ -472,27 +534,32 @@ class Runner:
                     w1 = time.perf_counter()
                     rgb = self.scene.render(cam_pose, states)
                     w2 = time.perf_counter()
-                    bayer = mosaic_rggb(apply_optics(rgb, cfg.optics))
-                    w3 = time.perf_counter()
                     capture_us = next_render_us + half_exposure
                     start = max(capture_us, link_free_us)
                     link_free_us = start + cfg.link.transfer_us(frame_bytes)
-                    develop = {"ground_truth": (w1 - w0) * 1e3, "render": (w2 - w1) * 1e3, "optics": (w3 - w2) * 1e3}
-                    pending.append(_PendingFrame(seq, capture_us, self.mcb_us, link_free_us, bayer, gt, develop))
+                    develop = {"ground_truth": (w1 - w0) * 1e3, "render": (w2 - w1) * 1e3}
+                    pending.append(_PendingFrame(seq, capture_us, self.mcb_us, link_free_us, None, gt, develop,
+                                                 job=self._develop_pool.submit(self._develop, rgb)))
                     seq += 1
                     next_render_us += period_us
 
                 while pending and pending[0].arrival_us <= self.mcb_us:
-                    frame = pending.pop(0)
-                    self._deliver(frame)
-                    if hooks is not None:
-                        hooks.frame_delivered(self, frame)
+                    if in_flight is not None:  # Northstar-CV takes one frame at a time
+                        self._finish(in_flight, hooks)
+                    in_flight = self._send(pending.pop(0))
+                    if not cfg.pipeline:
+                        self._finish(in_flight, hooks)
+                        in_flight = None
 
                 self.link.flush(self.mcb_us)
 
+            if in_flight is not None:
+                self._finish(in_flight, hooks)
             wall = time.perf_counter() - wall_start
-            self._event("done", frames=seq, sim_s=round((self.mcb_us - t0_us) / 1e6, 3), wall_s=round(wall, 2))
+            self._event("done", frames=seq, sim_s=round((self.mcb_us - t0_us) / 1e6, 3), wall_s=round(wall, 2),
+                        late_aims=self._late_aims)
         finally:
+            self._develop_pool.shutdown(cancel_futures=True)
             for f in self._files.values():
                 f.close()
             self.frames.close()
