@@ -23,6 +23,9 @@ def cv_command(harness_host: str, build_dir: str, frame_port: int, uart_port: in
         # previous segment, which Windows delays by up to 200 ms.
         f"socat PTY,link=/tmp/ttySIM,raw,echo=0 TCP:{h}:{uart_port},forever,interval=0.5,nodelay & "
         "for i in $(seq 100); do [ -e /tmp/ttySIM ] && break; sleep 0.1; done; "
+        # The particle filter library is built next to the binary, whose RUNPATH may name another
+        # build directory (e.g. /ws/build for a build/jetpack6 build).
+        f'LD_LIBRARY_PATH="$PWD/{build_dir}${{LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}}" '
         f"exec ./{build_dir}/NorthstarCV2 --sim {h}:{frame_port} --uart /tmp/ttySIM --telemetry {h}:{telemetry_port}"
     )
 
