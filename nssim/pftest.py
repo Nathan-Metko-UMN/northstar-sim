@@ -93,6 +93,10 @@ def summarize(run: Path) -> dict:
     spec = cfg["targets"][0]["spec"]
     settled = s["t"] >= SETTLE_S
     r_err = (np.abs(s["radius_high"] - s["true_radius_high"]) + np.abs(s["radius_low"] - s["true_radius_low"])) / 2
+    if spec["z_offset"] == 0:
+        # No pair is higher, so which one the tracker calls "high" is arbitrary: take the better match.
+        swapped = (np.abs(s["radius_high"] - s["true_radius_low"]) + np.abs(s["radius_low"] - s["true_radius_high"])) / 2
+        r_err = np.fmin(r_err, swapped)
     out = {
         "run": run.name,
         "robot": spec["name"],
