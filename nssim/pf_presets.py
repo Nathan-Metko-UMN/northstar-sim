@@ -44,3 +44,12 @@ PRESETS["next"] = {
     "PF_POSITION_OUTLIER_WEIGHT": "0.05",
     "ARMOR_TYPE_FROM_NUMBER": "1",
 }
+# "next" with plate poses solved for yaw and position only (tilt and roll known), and yaw trusted
+# to match: 2 degrees up to 3 m, growing as distance^4 beyond (15 degrees at 5 m).
+PRESETS["next2"] = {
+    **PRESETS["next"],
+    "PNP_FIXED_TILT": "1",
+    "PF_YAW_VARIANCE": "0.0012",
+    "PF_YAW_REF_DISTANCE": "3",
+    "PF_YAW_DISTANCE_POWER": "4",
+}
