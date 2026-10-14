@@ -43,9 +43,19 @@ Shifting it 2 px up or down drops P("3") below 0.1. Anything that changes the de
 length relative to the sticker (exposure, glare, a different lens) moves plates across that edge.
 Worth training the next classifier (or the TensorRT detector) with scale and shift augmentation.
 
-**Range reads short by about 2%** (−5 cm at 2.4 m). Glare makes the thresholded bars ~2% longer
-than the 57 mm PnP assumes, so plates come out closer. The real camera will have its own version
-of this; check against a tape-measured plate.
+**Range reads short, more so at an angle**: −2 cm head-on to −4…−6 cm at 45–60° (3 m). The light
+bars come out of `findLights` 0.4 px (head-on) to 0.8 px (45–60°) longer than they are: their ends
+are the bounding box of the thresholded blob, which includes the glow past the bar ends. Bar spacing
+is right, so PnP puts the plate 1–2% too close, and the filter's center follows (the center sat
+4–7 cm toward the camera). Pulling each detected end in by 0.25 px (`LIGHT_END_SHRINK_PX`, a test
+switch on `claude/pf-height-tests`) takes the head-on error to 0.0 cm and 45–60° to −1…−2 cm, with
+recall unchanged. The real camera's glow differs: set it there against a tape-measured plate.
+
+**The filter ignored the plate yaw PnP measures.** With positions alone, a robot that stops at an
+angle drifted toward "plate faces the camera" (~25°, the center 11 cm off). PnP's yaw (outward
+normal = −x of its armor frame) has a median error within ±2° but 6–21° spread and 3–5% outliers
+beyond 30°; scored with σ = 15° and an outlier floor (`PF_YAW_VARIANCE`, `PF_YAW_INIT`) it takes
+the stopped center error from 11 cm to 1 cm and halves the center kick at plate switches.
 
 ## Appearance calibration (`nssim/sim/scene.py`, `nssim/camera/optics.py`)
 
