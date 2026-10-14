@@ -168,6 +168,7 @@ def series(run: Path) -> dict:
         rows.append({
             "t": frame["gt"]["t"], "seq": m["seq"], "target": err["target"], "seen": seen,
             "cx": st["center"][0], "cy": st["center"][1], "cz": st["center"][2],
+            "tx": target["center_base"][0], "ty": target["center_base"][1],
             "vel_err": float(np.linalg.norm(np.asarray(st["center_velocity"]) - np.asarray(target["velocity"]))),
             "yaw": (m.get("aim") or {}).get("yaw", math.nan),
             **{k: err[k] for k in ("center_xy_m", "z_offset_m", "radius_high_m", "radius_low_m", "orientation_rad",
@@ -192,7 +193,8 @@ def jerk_metrics(s: dict, settle_s: float = 2.0) -> dict:
         keep = seg[t >= t[0] + settle_s]
         if len(keep) < 10:
             continue
-        c = np.c_[s["cx"][keep], s["cy"][keep]]
+        # Frame-to-frame change of the center error: the robot's own motion doesn't count.
+        c = np.c_[s["cx"][keep] - s["tx"][keep], s["cy"][keep] - s["ty"][keep]]
         step = np.r_[0.0, np.linalg.norm(np.diff(c, axis=0), axis=1)]
         steps.append(step[1:])
         seen = s["seen"][keep]
