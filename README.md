@@ -123,6 +123,26 @@ The run is paced to the wall clock. With Northstar-CV in Docker Desktop each fra
 `--fps 166` gives the real camera rate in slow motion (the panel shows the factor). Close the
 viewer to stop; the run is saved and evaluated like any other.
 
+## Tracker test
+
+`nssim pftest` drives each robot type (infantry, hero, sentry) with each plate layout (oval or
+round ring, with or without a height offset) around a tour, 2 to 5.5 m from us along the field's
+clear line of sight, while it spins fast, slowly, the other way and not at all. The other two
+robot types drive beside it. Each run gets `pftest.png` (distance, spin, center and aim error,
+radii and height offset against truth, detections), and the test gets `report.md` and
+`pftest_summary.png` with errors by distance and by spin rate.
+
+```
+.venv\Scripts\nssim pftest                          # Northstar-CV as built, 12 runs at 166 fps
+.venv\Scripts\nssim pftest --preset final --fps 50  # the tracker switches from the sim tests, ~3x faster
+.venv\Scripts\nssim pftest --robots hero --layouts round_flat --view   # one run, in the 3D viewer
+.venv\Scripts\nssim pftest-report runs\pftest\A runs\pftest\B           # compare two tests
+```
+
+By default the turret follows the robot under test, so what the camera sees doesn't depend on the
+tracker (`--follow cv` follows the CV's aim instead). `--preset` (also on `run` and `drive`)
+applies a named set of tracker switches from `nssim/pf_presets.py`; `--cv-env` adds to it.
+
 ## Live dashboard
 
 Add `--dashboard` to `run` or `drive` and open the address it prints in any browser, on this
