@@ -18,7 +18,7 @@ from nssim.metrics import pnp_order as _pnp_order  # noqa: F401 (older scripts i
 from nssim.metrics import wrap as _wrap  # noqa: F401
 
 FILTER_KEYS = ["center_xy_m", "center_z_m", "velocity_mps", "radius_high_m", "radius_low_m", "radius_mean_m", "z_offset_m",
-               "omega_radps", "orientation_rad", "labeling_ok", "plates_m"]
+               "omega_radps", "orientation_rad", "labeling_ok", "plates_m", "facing_plates_m"]
 
 
 def _load(path: Path) -> list[dict]:

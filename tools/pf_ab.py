@@ -42,6 +42,7 @@ VARIANTS = {
     "obsz": {"PF_OBS_Z_VARIANCE": "0.0003"},
     "dzq": {"PF_Z_OFFSET_PROCESS_VARIANCE": "0.0001"},
     "omegaq1": {"PF_ORIENTATION_VELOCITY_PROCESS_VARIANCE": "1"},
+    "viscoef3": {"PF_VISIBILITY_LOGIT_COEFFICIENT": "3"},
 }
 
 DZ_SETTLED_M = 0.005
@@ -92,7 +93,7 @@ def series(run_dir: Path) -> dict[str, np.ndarray]:
                 tracks[m["seq"]] = m
     keys = ["z_offset", "true_z_offset", "z_offset_m", "radius_high", "radius_low", "true_radius_high",
             "true_radius_low", "radius_high_m", "radius_low_m", "radius_mean_m", "orientation_rad", "labeling_ok",
-            "plates_m", "center_xy_m", "omega", "true_omega"]
+            "plates_m", "facing_plates_m", "center_xy_m", "omega", "true_omega"]
     rows = {k: [] for k in ["t", *keys]}
     for frame in frames:
         f = frame_errors(frame, None, tracks.get(frame["seq"]))["filter"]
@@ -132,6 +133,9 @@ def summarize(run_dir: Path) -> dict:
         "labeling_ok": float(np.mean(s["labeling_ok"])),
         "plates_cm": float(np.mean(s["plates_m"]) * 100),
         "plates_p95_cm": float(np.percentile(s["plates_m"], 95) * 100),
+        "facing_cm": float(np.nanmean(s["facing_plates_m"]) * 100),
+        "final_facing_cm": float(np.nanmean(s["facing_plates_m"][final]) * 100),
+        "final_center_cm": float(np.mean(s["center_xy_m"][final]) * 100),
         "dz_settle_s": _settle_time(t, np.abs(s["z_offset_m"]) < DZ_SETTLED_M),
         "labeling_settle_s": _settle_time(t, s["labeling_ok"] > 0.5),
         "labeling_flips": int(np.sum(np.abs(np.diff(s["labeling_ok"])) > 0.5)),
@@ -152,6 +156,11 @@ def summarize(run_dir: Path) -> dict:
             out["at_spin_start_z_err_mm"] = float(s["z_offset_m"][i] * 1000)
             out["still_labeling_ok"] = float(np.mean(s["labeling_ok"][before]))
             out["still_plates_cm"] = float(np.mean(s["plates_m"][before]) * 100)
+            out["still_facing_cm"] = float(np.nanmean(s["facing_plates_m"][before]) * 100)
+            settled = t >= start + 2.0
+            out["after_spin_2s_plates_cm"] = float(np.mean(s["plates_m"][settled]) * 100) if settled.any() else math.nan
+            spin_ok = np.abs(s["omega"] - s["true_omega"]) < 0.5
+            out["spin_found_s"] = _settle_time(t[t >= start], spin_ok[t >= start]) - start
     return out
 
 
@@ -200,6 +209,8 @@ COLUMNS = [
     ("labeling_flips", "flips", lambda v: f"{v:.0f}"),
     ("plates_cm", "plate err cm", lambda v: f"{v:.1f}"),
     ("final_plates_cm", "… last 3 s", lambda v: f"{v:.1f}"),
+    ("facing_cm", "facing plate err cm", lambda v: f"{v:.1f}"),
+    ("final_center_cm", "center err cm (last 3 s)", lambda v: f"{v:.1f}"),
     ("final_z_err_mm", "dz err mm", lambda v: f"{v:+.1f}"),
     ("dz_settle_s", "dz settle s", lambda v: "never" if not math.isfinite(v) else f"{v:.1f}"),
     ("final_r_high_err_cm", "r high err cm", lambda v: f"{v:+.1f}"),
@@ -209,6 +220,9 @@ COLUMNS = [
     ("still_labeling_ok", "still: pair right", lambda v: f"{v * 100:.0f}%"),
     ("still_plates_cm", "still: plate err cm", lambda v: f"{v:.1f}"),
     ("at_spin_start_r_mean_err_cm", "r err at spin-up cm", lambda v: f"{v:+.1f}"),
+    ("at_spin_start_z_err_mm", "dz err at spin-up mm", lambda v: f"{v:+.1f}"),
+    ("spin_found_s", "spin found after s", lambda v: "never" if not math.isfinite(v) else f"{v:.1f}"),
+    ("after_spin_2s_plates_cm", "plate err from 2 s after spin-up cm", lambda v: f"{v:.1f}"),
 ]
 
 
