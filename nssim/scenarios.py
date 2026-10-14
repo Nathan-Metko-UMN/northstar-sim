@@ -169,6 +169,50 @@ def strafe_long(omega: float = 4.0, duration_s: float = 10.0) -> RunConfig:
     )
 
 
+# Recordings for replay (tools/replay.py): what the camera sees mustn't depend on the tracker, so
+# the turret holds its first aim or follows a script, never the CV's aim. Robots are ovals (the
+# pairs at different radii) with different plate height offsets, as real robots are.
+
+REC_ROBOTS = {
+    # name: (panel, number, radius of plates 0/2 (the high pair), radius of 1/3, height offset)
+    "oval3": ("infantry", "3", 0.22, 0.32, 0.03),
+    "oval3b": ("infantry", "3", 0.32, 0.22, 0.015),
+    "round3": ("infantry", "3", 0.27, 0.27, 0.0),
+    "hero": ("hero", "1", 0.30, 0.36, 0.05),
+    "sentry": ("sentry", "guard", 0.28, 0.28, 0.0),
+}
+
+
+def _rec_spec(robot: str, name: str | None = None) -> TargetSpec:
+    panel, number, r_high, r_low, dz = REC_ROBOTS[robot]
+    return TargetSpec(name=name or robot, panel=panel, number=number, radius_high=r_high, radius_low=r_low, z_offset=dz)
+
+
+def _rec(name: str, duration_s: float, targets: list[TargetConfig], aim_script=None) -> RunConfig:
+    return RunConfig(
+        name=name,
+        duration_s=duration_s,
+        shooter_base_xy=[-1.5, 0.0],
+        initial_aim=targets[0].spec.name,
+        turret=TurretConfig(mode="second_order" if aim_script else "hold"),
+        targets=targets,
+        aim_script=aim_script or [],
+    )
+
+
+def _rec_spin(robot: str, omega: float, duration_s: float = 20.0, name: str | None = None, **motion) -> RunConfig:
+    return _rec(name or f"rec_{robot}", duration_s, [TargetConfig(_rec_spec(robot), Motion(start=[1.5, 0.0], omega=omega, **motion))])
+
+
+def rec_switch(duration_s: float = 26.0) -> RunConfig:
+    """Three different robots side by side, all spinning; the turret looks at one, then another,
+    and back, so the tracker drops one robot and picks up another (and meets each again)."""
+    lineup = [("oval3", [1.5, -1.0], 6.0), ("hero", [1.7, 0.1], -4.0), ("sentry", [1.5, 1.1], 5.0)]
+    targets = [TargetConfig(_rec_spec(robot), Motion(start=xy, omega=omega)) for robot, xy, omega in lineup]
+    script = [(0.0, "oval3"), (5.0, "hero"), (9.0, "oval3"), (13.0, "sentry"), (17.0, "hero"), (21.0, "oval3")]
+    return _rec("rec_switch", duration_s, targets, script)
+
+
 SCENARIOS = {
     "static_plate": static_plate,
     "spinning": spinning,
@@ -179,4 +223,13 @@ SCENARIOS = {
     "height_flip": height_flip,
     "spin_long": spin_long,
     "strafe_long": strafe_long,
+    "rec_oval3": lambda: _rec_spin("oval3", 6.0),
+    "rec_oval3b": lambda: _rec_spin("oval3b", -5.0),
+    "rec_round3": lambda: _rec_spin("round3", 6.0),
+    "rec_hero": lambda: _rec_spin("hero", 4.0),
+    "rec_sentry": lambda: _rec_spin("sentry", 6.0),
+    "rec_strafe_oval3": lambda: _rec_spin("oval3", 4.0, name="rec_strafe_oval3", strafe_amplitude=0.6, strafe_hz=0.5),
+    "rec_strafe_hero": lambda: _rec_spin("hero", -3.0, name="rec_strafe_hero", strafe_amplitude=0.5, strafe_hz=0.4),
+    "rec_spinup_oval3": lambda: _rec_spin("oval3", 6.0, duration_s=14.0, name="rec_spinup_oval3", spin_start_s=4.0),
+    "rec_switch": rec_switch,
 }

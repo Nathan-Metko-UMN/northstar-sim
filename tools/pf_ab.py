@@ -46,6 +46,15 @@ VARIANTS = {
     "viscoef3": {"PF_VISIBILITY_LOGIT_COEFFICIENT": "3"},
     "velq3": {"PF_CENTER_XY_VELOCITY_PROCESS_VARIANCE": "3"},
     "velq10": {"PF_CENTER_XY_VELOCITY_PROCESS_VARIANCE": "10"},
+    "velq1": {"PF_CENTER_XY_VELOCITY_PROCESS_VARIANCE": "1"},
+    "velq03": {"PF_CENTER_XY_VELOCITY_PROCESS_VARIANCE": "0.3"},
+    "obs1": {"PF_OBS_MODEL": "1"},
+    "obs1loose": {"PF_OBS_MODEL": "1", "PF_OBS_LATERAL_VARIANCE": "0.0004", "PF_OBS_RANGE_VARIANCE": "0.002",
+                  "PF_OBS_RANGE_ANGLE_VARIANCE": "0.01"},
+    "lock": {"PF_LOCK_TIME": "2", "PF_LOCK_FLOOR": "0.1"},
+    "lockhard": {"PF_LOCK_TIME": "1", "PF_LOCK_FLOOR": "0.02"},
+    "mem": {"PF_MEMORY": "1"},
+    "assoc": {"PF_ASSOC_BEST": "1"},
 }
 
 DZ_SETTLED_M = 0.005

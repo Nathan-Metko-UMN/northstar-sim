@@ -71,6 +71,9 @@ class RunConfig:
     tick_us: int = 1000
     shooter_base_xy: list[float] = field(default_factory=lambda: [-1.5, 0.0])
     initial_aim: str | list[float] | None = None  # target name to face at t=0, or [yaw, pitch]
+    # [(from time s, target name), ...]: the turret points at these targets in turn and ignores the
+    # CV's aim, so what the camera sees doesn't depend on the tracker (for recordings to replay).
+    aim_script: list[tuple[float, str]] = field(default_factory=list)
     turret: TurretConfig = field(default_factory=TurretConfig)
     mcb: McbConfig = field(default_factory=McbConfig)
     targets: list[TargetConfig] = field(default_factory=lambda: [TargetConfig()])
@@ -463,7 +466,11 @@ class Runner:
                         self._from_cv(apply_us, rx_frame, data)
 
                 aim = self.mcb.aim_state
-                self.turret.step(cfg.tick_us / 1e6, (aim.aim.yaw, aim.aim.pitch) if aim.updated else None)
+                setpoint = (aim.aim.yaw, aim.aim.pitch) if aim.updated else None
+                if cfg.aim_script:
+                    name = [n for t_from, n in cfg.aim_script if t_from <= t][-1:] or [cfg.aim_script[0][1]]
+                    setpoint = self.shooter.aim_at(self.targets[name[0]].state(t).center)
+                self.turret.step(cfg.tick_us / 1e6, setpoint)
                 self._mcb_tx()
 
                 if self.mcb_us >= next_render_us:
