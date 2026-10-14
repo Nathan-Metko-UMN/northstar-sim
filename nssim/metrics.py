@@ -95,8 +95,20 @@ def frame_errors(frame: dict, det: dict | None, track: dict | None) -> dict:
         # The enemy the filter is on (a run can have several): the true center nearest its estimate.
         target = min(gt["targets"], key=lambda tg: np.linalg.norm(np.asarray(tg["center_base"])[:2] - center[:2]))
         true_center = np.asarray(target["center_base"])
-        true_radius_high = target["radius_high"]
-        true_radius_low = target["radius_low"]
+        # The filter calls the high pair pair 0 (radius_0, at `orientation`). Which pair is high in
+        # truth: plates 0 and 2 unless z_offset is negative (a height flip). At z_offset 0 neither is,
+        # and orientation_rad / labeling_ok / the per-pair radii have no right answer.
+        true_dz = float(target.get("z_offset", 0.0))
+        high_is_1 = true_dz < 0
+        true_spin_high = target["spin"] + (math.pi / 2 if high_is_1 else 0.0)
+        true_radius_high = target["radius_low"] if high_is_1 else target["radius_high"]
+        true_radius_low = target["radius_high"] if high_is_1 else target["radius_low"]
+        orientation_err = float(wrap(state["orientation"] - true_spin_high, math.pi))
+        # Label-free: how far each true plate is from the nearest plate the filter predicts.
+        predicted = np.asarray(state.get("plates", []), float).reshape(-1, 3)
+        true_plates = [np.asarray(p["center_base"]) for p in target["plates"]]
+        plates_m = (float(np.mean([np.min(np.linalg.norm(predicted - tp, axis=1)) for tp in true_plates]))
+                    if len(predicted) else math.nan)
         out["filter"] = {
             "target": target["name"],
             "center_xy_m": float(np.linalg.norm(center[:2] - true_center[:2])),
@@ -104,8 +116,12 @@ def frame_errors(frame: dict, det: dict | None, track: dict | None) -> dict:
             "velocity_mps": float(np.linalg.norm(np.asarray(state["center_velocity"]) - np.asarray(target["velocity"]))),
             "radius_high_m": float(state["radius_0"] - true_radius_high),
             "radius_low_m": float(state["radius_1"] - true_radius_low),
+            "radius_mean_m": float((state["radius_0"] + state["radius_1"] - true_radius_high - true_radius_low) / 2),
+            "z_offset_m": float(state.get("z_offset", 0.0) - abs(true_dz)),
             "omega_radps": float(state["omega"] - target["omega"]),
-            "orientation_rad": float(wrap(state["orientation"] - target["spin"], math.pi)),
+            "orientation_rad": orientation_err,
+            "labeling_ok": float(abs(orientation_err) < math.pi / 4),
+            "plates_m": plates_m,
             # What the errors are relative to, for plotting estimate against truth.
             "omega": float(state["omega"]),
             "true_omega": float(target["omega"]),
@@ -113,5 +129,7 @@ def frame_errors(frame: dict, det: dict | None, track: dict | None) -> dict:
             "radius_low": float(state["radius_1"]),
             "true_radius_high": float(true_radius_high),
             "true_radius_low": float(true_radius_low),
+            "z_offset": float(state.get("z_offset", 0.0)),
+            "true_z_offset": abs(true_dz),
         }
     return out

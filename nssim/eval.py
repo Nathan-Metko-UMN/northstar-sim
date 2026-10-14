@@ -17,7 +17,8 @@ from nssim.metrics import MATCH_M, MATCH_PX, MAX_INCIDENCE_DEG, frame_errors  # 
 from nssim.metrics import pnp_order as _pnp_order  # noqa: F401 (older scripts import it from here)
 from nssim.metrics import wrap as _wrap  # noqa: F401
 
-FILTER_KEYS = ["center_xy_m", "center_z_m", "velocity_mps", "radius_high_m", "radius_low_m", "omega_radps", "orientation_rad"]
+FILTER_KEYS = ["center_xy_m", "center_z_m", "velocity_mps", "radius_high_m", "radius_low_m", "radius_mean_m", "z_offset_m",
+               "omega_radps", "orientation_rad", "labeling_ok", "plates_m"]
 
 
 def _load(path: Path) -> list[dict]:
@@ -99,10 +100,12 @@ def format_summary(summary: dict) -> str:
         f"plates     range {_mean_rms(m['range'], 100, ' cm')}, lateral {_mean_rms(m['lateral'], 1000, ' mm')},"
         f" vertical {_mean_rms(m['vertical'], 1000, ' mm')}",
         f"filter     center {_mean_rms(f['center_xy_m'], 100, ' cm')}, velocity {_mean_rms(f['velocity_mps'], 1, ' m/s', 2)},"
-        f" radius high {_mean_rms(f['radius_high_m'], 100, ' cm')}",
-        f" radius high {_mean_rms(f['radius_low_m'], 100, ' cm')}",
+        f" radius high {_mean_rms(f['radius_high_m'], 100, ' cm')}, low {_mean_rms(f['radius_low_m'], 100, ' cm')}",
         f"           spin {_mean_rms(f['omega_radps'], 1, ' rad/s', 2)},"
-        f" orientation {_mean_rms(f['orientation_rad'], 180 / math.pi, ' deg')}",
+        f" orientation {_mean_rms(f['orientation_rad'], 180 / math.pi, ' deg')},"
+        f" plate height offset {_mean_rms(f['z_offset_m'], 1000, ' mm')}",
+        f"           plates {_mean_rms(f['plates_m'], 100, ' cm')} from the filter's,"
+        f" high pair right {f['labeling_ok']['mean'] * 100:.0f}% of frames" if f["labeling_ok"].get("n") else "",
         f"CV time    {cv_ms['mean']:.1f} ms mean, {cv_ms['p95_abs']:.1f} ms p95" if cv_ms.get("n") else "CV time    n/a",
     ])
 

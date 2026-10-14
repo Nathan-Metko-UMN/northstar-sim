@@ -24,7 +24,10 @@ const DEFAULT_LAYOUT = {
           { name: "metrics.filter.center_xy_m", label: "horizontal", transform: "cm" },
           { name: "metrics.filter.center_z_m", label: "height", transform: "cm" }] },
         { id: "radius", title: "Filter radius error", y: { auto: true, zero: true }, signals: [
-          { name: "metrics.filter.radius_m", label: "radius", transform: "cm" }] },
+          { name: "metrics.filter.radius_high_m", label: "high pair", transform: "cm" },
+          { name: "metrics.filter.radius_low_m", label: "low pair", transform: "cm" }] },
+        { id: "zoffset", title: "Filter plate height offset error", y: { auto: true, zero: true }, signals: [
+          { name: "metrics.filter.z_offset_m", label: "height offset", transform: "cm" }] },
         { id: "orient", title: "Filter orientation error (mod 180°)", y: { auto: true, zero: true }, signals: [
           { name: "metrics.filter.orientation_rad", label: "orientation", transform: "deg" }] },
         { id: "plates", title: "Plates per frame", y: { auto: true, zero: true }, digits: 0, signals: [

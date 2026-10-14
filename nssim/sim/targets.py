@@ -31,15 +31,23 @@ class TargetSpec:
     z_offset: float = 0.03  # high pair sits this far above the center, low pair below
     center_height: float = 0.20  # plate-ring center above the floor
     tilt_deg: float = 15.0  # plate normals point up by this much
+    # From this time on the pairs trade heights (z_offset changes sign), to test whether a filter can
+    # change which pair it calls high. Real robots don't do this.
+    z_offset_flip_s: float = math.inf
+
+    def z_offset_at(self, t: float) -> float:
+        return -self.z_offset if t >= self.z_offset_flip_s else self.z_offset
 
 
-def plate_transforms(spec: TargetSpec, center: np.ndarray, spin: float) -> list[Transform]:
-    """World transforms of the four plate frames (origin at the light-bar center)."""
+def plate_transforms(spec: TargetSpec, center: np.ndarray, spin: float, z_offset: float | None = None) -> list[Transform]:
+    """World transforms of the four plate frames (origin at the light-bar center). ``z_offset``
+    overrides the spec's (plates 0 and 2 sit that far above the center, 1 and 3 below)."""
+    z_offset = spec.z_offset if z_offset is None else z_offset
     tilt = rot_y(-np.radians(spec.tilt_deg))  # rotates the outward normal upward
     plates = []
     for i in range(4):
         radius = spec.radius_high if i % 2 == 0 else spec.radius_low
-        height = spec.z_offset if i % 2 == 0 else -spec.z_offset
+        height = z_offset if i % 2 == 0 else -z_offset
         T = (
             Transform.translation(center)
             @ Transform.rotation(rot_z(spin + i * np.pi / 2))
@@ -68,7 +76,8 @@ class Motion:
     """Scripted target motion: center moves linearly or sinusoidally while spinning at a constant rate.
 
     center(t) = start + velocity * t + strafe_amplitude * sin(2*pi*strafe_hz*t) * strafe_dir
-    spin(t) = spin0 + omega * t
+    spin(t) = spin0 + omega * t, or with spin_start_s: still until then, then spinning up to omega at
+    spin_accel (rad/s^2, TR's chassis manages about 12)
     """
 
     start: list[float] = field(default_factory=lambda: [0.0, 0.0])  # x, y on the field
@@ -78,6 +87,8 @@ class Motion:
     strafe_dir: list[float] = field(default_factory=lambda: [0.0, 1.0])
     spin0: float = 0.0
     omega: float = 0.0  # rad/s, CCW positive
+    spin_start_s: float = 0.0
+    spin_accel: float = 12.0
 
     def center_xy(self, t: float) -> np.ndarray:
         xy = np.asarray(self.start, float) + np.asarray(self.velocity, float) * t
@@ -95,7 +106,19 @@ class Motion:
         return v
 
     def spin(self, t: float) -> float:
-        return self.spin0 + self.omega * t
+        if not self.spin_start_s:
+            return self.spin0 + self.omega * t
+        ts = max(0.0, t - self.spin_start_s)
+        ramp = abs(self.omega) / self.spin_accel  # time to reach omega
+        if ts < ramp:
+            return self.spin0 + 0.5 * math.copysign(self.spin_accel, self.omega) * ts * ts
+        return self.spin0 + 0.5 * self.omega * ramp + self.omega * (ts - ramp)
+
+    def omega_at(self, t: float) -> float:
+        if not self.spin_start_s:
+            return self.omega
+        ts = max(0.0, t - self.spin_start_s)
+        return math.copysign(min(abs(self.omega), self.spin_accel * ts), self.omega)
 
 
 class DrivenMotion:
@@ -143,6 +166,9 @@ class DrivenMotion:
     def spin(self, t: float) -> float:
         return self.angle
 
+    def omega_at(self, t: float) -> float:
+        return self.omega
+
 
 @dataclass
 class TargetState:
@@ -151,6 +177,7 @@ class TargetState:
     spin: float
     omega: float
     plates: list[Transform]
+    z_offset: float = 0.0  # signed: plates 0 and 2 sit this far above the center
 
 
 class Target:
@@ -163,10 +190,12 @@ class Target:
         xy = self.motion.center_xy(t)
         center = np.array([xy[0], xy[1], self.floor_z + self.spec.center_height])
         spin = self.motion.spin(t)
+        z_offset = self.spec.z_offset_at(t)
         return TargetState(
             center=center,
             velocity=self.motion.velocity_xy(t),
             spin=spin,
-            omega=self.motion.omega,
-            plates=plate_transforms(self.spec, center, spin),
+            omega=self.motion.omega_at(t),
+            plates=plate_transforms(self.spec, center, spin, z_offset),
+            z_offset=z_offset,
         )

@@ -317,7 +317,7 @@ class Runner:
                     "omega": state.omega,
                     "radius_high": spec.radius_high,
                     "radius_low": spec.radius_low,
-                    "z_offset": spec.z_offset,
+                    "z_offset": state.z_offset,  # signed: plates 0 and 2 sit this far above the center
                     "plates": plates,
                 }
             )

@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 import json
+import math
 import sys
 from pathlib import Path
 
@@ -45,6 +46,10 @@ def _apply_common(cfg, args):
             target.spec.radius_high = target.spec.radius_low = args.radius
         if getattr(args, "radius_low", None) is not None:
             target.spec.radius_low = args.radius_low
+        if getattr(args, "omega", None) is not None and hasattr(target.motion, "omega"):
+            target.motion.omega = args.omega
+        if getattr(args, "spin0", None) is not None and hasattr(target.motion, "spin0"):
+            target.motion.spin0 += math.radians(args.spin0)
     return cfg
 
 
@@ -199,7 +204,17 @@ def _launcher(args, cv_dir: Path):
         sys.exit(f"no simulator build of Northstar-CV in {cv_dir / build_dir}; run `nssim build-cv{jetpack_flag}` first")
     if not image_exists(image):
         sys.exit(f"Docker image {image} not found; run `nssim build-cv{jetpack_flag}` first")
-    return CvContainer(cv_dir=cv_dir, image=image, build_dir=build_dir)
+    return CvContainer(cv_dir=cv_dir, image=image, build_dir=build_dir, env=_cv_env(args))
+
+
+def _cv_env(args) -> dict[str, str]:
+    env = {}
+    for item in getattr(args, "cv_env", None) or []:
+        name, sep, value = item.partition("=")
+        if not sep or not name:
+            sys.exit(f"--cv-env wants NAME=VALUE, got {item!r}")
+        env[name] = value
+    return env
 
 
 def cmd_eval(args) -> None:
@@ -286,6 +301,8 @@ def main(argv=None) -> None:
     loop.add_argument("--image", help="Docker image (default: the --jetpack toolchain's)")
     loop.add_argument("--build-dir", help="build directory in --cv-dir (default: the --jetpack toolchain's)")
     loop.add_argument("--no-compress", action="store_true", help="send raw Bayer frames (fast wired links)")
+    loop.add_argument("--cv-env", action="append", metavar="NAME=VALUE",
+                      help="environment variable for Northstar-CV in Docker here, e.g. PF_RELABEL_AT_ZERO=1 (repeatable)")
     _add_enemy_options(loop)
     loop.add_argument("--out", help="run directory (default: runs/<time>_<scenario>)")
     loop.add_argument("--dashboard", action="store_true", help="serve a live dashboard to browsers (any device)")
@@ -296,6 +313,8 @@ def main(argv=None) -> None:
     run.add_argument("--duration", type=float)
     run.add_argument("--fps", type=float)
     run.add_argument("--turret", choices=["hold", "ideal", "second_order"])
+    run.add_argument("--omega", type=float, metavar="RAD_S", help="the enemies' spin rate (scripted scenarios)")
+    run.add_argument("--spin0", type=float, metavar="DEG", help="turn the enemies' starting angle by this much")
     run.add_argument("--view", action="store_true", help="watch it live in a 3D viewer (paced to real time)")
     run.add_argument("--no-cv-window", action="store_true", help="with --view: skip the camera window")
     run.set_defaults(func=cmd_run)

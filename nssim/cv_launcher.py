@@ -9,7 +9,7 @@ from __future__ import annotations
 import shlex
 import socket
 import subprocess
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from nssim.cv_build import TOOLCHAINS
@@ -63,6 +63,7 @@ class CvContainer:
     name: str = "nssim-cv"
     docker_context: str | None = None
     gpus: bool = True
+    env: dict[str, str] = field(default_factory=dict)
 
     def command(self) -> list[str]:
         inner = cv_command(self.harness_host, self.build_dir, self.frame_port, self.uart_port, self.telemetry_port)
@@ -72,6 +73,8 @@ class CvContainer:
         cmd += ["run", "--rm", "--name", self.name]
         if self.gpus:
             cmd += ["--gpus", "all"]
+        for name, value in self.env.items():
+            cmd += ["-e", f"{name}={value}"]
         cmd += ["-v", f"{self.cv_dir}:/ws", "-w", "/ws", self.image, "bash", "-lc", inner]
         return cmd
 

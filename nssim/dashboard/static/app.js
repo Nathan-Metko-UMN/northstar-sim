@@ -301,7 +301,9 @@ function renderTracking() {
   if (f) {
     items.push(["tracking", f.target]);
     items.push(["spin", `${f.omega.toFixed(2)} rad/s  (true ${f.true_omega.toFixed(2)})`]);
-    items.push(["radius", `${f.radius.toFixed(3)} m  (true ${f.true_radius.toFixed(3)})`]);
+    items.push(["radius high", `${f.radius_high.toFixed(3)} m  (true ${f.true_radius_high.toFixed(3)})`]);
+    items.push(["radius low", `${f.radius_low.toFixed(3)} m  (true ${f.true_radius_low.toFixed(3)})`]);
+    if (f.z_offset !== undefined) items.push(["height offset", `${(f.z_offset * 100).toFixed(1)} cm  (true ${(f.true_z_offset * 100).toFixed(1)})`]);
     items.push(["center off by", `${(f.center_xy_m * 100).toFixed(1)} cm`]);
     items.push(["orientation off by", `${(f.orientation_rad * DEG).toFixed(1)}°`]);
   } else {
