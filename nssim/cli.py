@@ -344,7 +344,7 @@ def main(argv=None) -> None:
     loop.add_argument("--image", help="Docker image (default: the --jetpack toolchain's)")
     loop.add_argument("--build-dir", help="build directory in --cv-dir (default: the --jetpack toolchain's)")
     loop.add_argument("--no-compress", action="store_true", help="send raw Bayer frames (fast wired links)")
-    loop.add_argument("--preset", choices=["current", "final"],
+    loop.add_argument("--preset", choices=["current", "final", "next"],
                       help="a named set of tracker switches for Northstar-CV in Docker here (see nssim/pf_presets.py); "
                       "--cv-env adds to it")
     loop.add_argument("--cv-env", action="append", metavar="NAME=VALUE",

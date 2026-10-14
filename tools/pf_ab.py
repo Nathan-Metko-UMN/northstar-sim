@@ -71,7 +71,13 @@ VARIANTS = {
     "yawa": {"PF_YAW_VARIANCE": "0.012", "PF_YAW_VARIANCE_ANGLE": "0.12"},
     "yawinit": {"PF_YAW_INIT": "1"},
     "shrink025": {"LIGHT_END_SHRINK_PX": "0.25"},
+    "finalp": {},
     "final3": {"PF_YAW_VARIANCE": "0.0685", "PF_YAW_INIT": "1", "LIGHT_END_SHRINK_PX": "0.25"},
+    "robust": {"PF_POSITION_OUTLIER_WEIGHT": "0.05"},
+    "robust01": {"PF_POSITION_OUTLIER_WEIGHT": "0.01"},
+    "posd10": {"PF_POSITION_REF_DISTANCE": "3", "PF_POSITION_SD_REF": "0.10"},
+    "posd06": {"PF_POSITION_REF_DISTANCE": "3", "PF_POSITION_SD_REF": "0.06"},
+    "posd04": {"PF_POSITION_REF_DISTANCE": "3", "PF_POSITION_SD_REF": "0.04"},
     "mode5": {"PF_CENTER_XY_VELOCITY_PROCESS_VARIANCE": "0.1", "PF_MANEUVER_VELOCITY_VARIANCE": "5", "PF_MANEUVER_SWITCH_RATE": "1"},
     "assoc": {"PF_ASSOC_BEST": "1"},
     "visflat": {"PF_VISIBILITY_LOGIT_COEFFICIENT": "10", "PF_VISIBILITY_THRESHOLD": "0.3"},
@@ -85,7 +91,12 @@ FINAL_WINDOW_S = 3.0
 
 def variant_env(name: str) -> dict[str, str]:
     env: dict[str, str] = {}
+    from nssim.pf_presets import PRESETS
+
     for part in name.split("+"):
+        if part in PRESETS:
+            env.update(PRESETS[part])
+            continue
         if part not in VARIANTS:
             sys.exit(f"unknown variant {part!r}; choose from {', '.join(VARIANTS)}")
         env.update(VARIANTS[part])

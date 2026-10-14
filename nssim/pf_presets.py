@@ -35,3 +35,12 @@ PRESETS: dict[str, dict[str, str]] = {
         "LIGHT_END_SHRINK_K": "17.2",
     },
 }
+# "final" plus what the spike hunt added: position trusted less with distance, an outlier floor on
+# it, and plate size from the number where only one size exists.
+PRESETS["next"] = {
+    **PRESETS["final"],
+    "PF_POSITION_REF_DISTANCE": "3",
+    "PF_POSITION_SD_REF": "0.06",
+    "PF_POSITION_OUTLIER_WEIGHT": "0.05",
+    "ARMOR_TYPE_FROM_NUMBER": "1",
+}

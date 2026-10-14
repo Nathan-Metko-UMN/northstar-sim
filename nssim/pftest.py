@@ -19,6 +19,7 @@ from nssim.metrics import frame_errors
 DISTANCE_BINS = [(1.5, 3.0), (3.0, 4.0), (4.0, 5.0), (5.0, 7.0)]
 SPIN_BINS = [(0.0, 0.5), (0.5, 2.0), (2.0, 4.0), (4.0, 99.0)]
 SETTLE_S = 5.0  # the summary's geometry errors leave out the first seconds
+SPIKE_M = 0.10  # an aimed-plate error this large counts as a spike
 
 
 def _jsonl(path: Path):
@@ -110,6 +111,10 @@ def summarize(run: Path) -> dict:
         "dz_err_mm": _mean(np.abs(s["z_offset"] - s["true_z_offset"])[settled]) * 1000,
         "spin_err": _mean(np.abs(s["omega"] - s["true_omega"])[s["tracking"] > 0]),
     }
+    # Spikes: frames where the aimed plate is more than SPIKE_M off, and how many separate times.
+    spiking = np.nan_to_num(s["aim_m"]) > SPIKE_M
+    out["spike_frames"] = float(spiking.mean())
+    out["spikes"] = int(np.sum(spiking[1:] & ~spiking[:-1]) + spiking[0])
     for lo, hi in DISTANCE_BINS:
         w = (s["distance"] >= lo) & (s["distance"] < hi)
         key = f"{lo:g}-{hi:g}m"
@@ -214,7 +219,8 @@ def report(roots: list[Path], out_dir: Path | None = None) -> Path:
     cols = [("tracking", "on robot", "{:.0%}"), ("recall", "recall", "{:.0%}"), ("aim_cm", "aim err cm", "{:.1f}"),
             ("aim_p95_cm", "aim p95 cm", "{:.1f}"), ("center_cm", "center err cm", "{:.1f}"),
             ("radius_err_cm", "radius err cm", "{:.1f}"), ("dz_err_mm", "dz err mm", "{:.1f}"),
-            ("spin_err", "spin err rad/s", "{:.2f}")]
+            ("spin_err", "spin err rad/s", "{:.2f}"), ("spikes", "spikes (aim >10 cm)", "{:.0f}"),
+            ("spike_frames", "spike frames", "{:.1%}")]
     lines += ["## Each run", "", "| robot | layout | test | " + " | ".join(c[1] for c in cols) + " |",
               "|---|---|---|" + "---|" * len(cols)]
     by_run: dict[str, dict[str, dict]] = {}
@@ -225,6 +231,11 @@ def report(roots: list[Path], out_dir: Path | None = None) -> Path:
         for label, s in per_test.items():
             lines.append(f"| {s['robot']} | {s['layout']} | {label} | " +
                          " | ".join(_fmt(s.get(k), f) for k, _, f in cols) + " |")
+    lines += ["", "| test | spikes (all runs) | spike frames | aim err cm | center err cm |", "|---|---|---|---|---|"]
+    for label, summaries in tests.items():
+        lines.append(f"| {label} | {sum(s.get('spikes', 0) for s in summaries)} | "
+                     f"{_fmt(_mean([s.get('spike_frames') for s in summaries]), '{:.1%}')} | "
+                     f"{_fmt(_mean([s['aim_cm'] for s in summaries]))} | {_fmt(_mean([s['center_cm'] for s in summaries]))} |")
     lines.append("")
 
     def mean_over(label, key):
