@@ -247,7 +247,7 @@ def summarize(run: Path) -> dict:
             if not on.any():
                 acquire["first" if visit == 0 else "again"].append(math.inf)
                 continue
-            ts, err = t[on], s["plates_m"][on]
+            ts, err = t[on], s["aim_plate_m"][on]
             good = math.inf
             for i in range(len(ts)):
                 w = (ts >= ts[i]) & (ts < ts[i] + 0.5)

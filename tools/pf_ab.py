@@ -54,7 +54,11 @@ VARIANTS = {
     "lock": {"PF_LOCK_TIME": "2", "PF_LOCK_FLOOR": "0.1"},
     "lockhard": {"PF_LOCK_TIME": "1", "PF_LOCK_FLOOR": "0.02"},
     "mem": {"PF_MEMORY": "1"},
+    "memz": {"PF_MEMORY": "1", "PF_MEMORY_CENTER_Z": "1"},
     "assoc": {"PF_ASSOC_BEST": "1"},
+    "visflat": {"PF_VISIBILITY_LOGIT_COEFFICIENT": "10", "PF_VISIBILITY_THRESHOLD": "0.3"},
+    "visflat20": {"PF_VISIBILITY_LOGIT_COEFFICIENT": "20", "PF_VISIBILITY_THRESHOLD": "0.25"},
+    "visweak": {"PF_VISIBILITY_LOGIT_COEFFICIENT": "0.2"},
 }
 
 DZ_SETTLED_M = 0.005
