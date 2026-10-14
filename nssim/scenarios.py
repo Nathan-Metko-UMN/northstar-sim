@@ -303,6 +303,22 @@ def pftest(robot: str = "infantry", geometry: str = "oval_offset", others: bool 
     return cfg
 
 
+def still(distance: float = 3.5, angle_deg: float = 0.0, robot: str = "infantry", duration_s: float = 15.0,
+          fps: float = 50.0) -> RunConfig:
+    """A robot standing still `distance` from us along the tracker test's line of sight, its plate 0
+    turned `angle_deg` away from facing us (one plate in view up to ~45 degrees). Turret holds."""
+    panel, number, extra = PFTEST_ROBOTS[robot]
+    r_high, r_low, dz = PFTEST_GEOMETRIES["oval_offset"]
+    spec = TargetSpec(name=robot, panel=panel, number=number, radius_high=r_high + extra, radius_low=r_low + extra, z_offset=dz)
+    start = (np.asarray(PFTEST_SHOOTER) + distance * _ALONG).tolist()
+    facing_us = math.atan2(-_ALONG[1], -_ALONG[0])
+    motion = ProfileMotion(start=start, spin0=facing_us + math.radians(angle_deg), segments=[[0.0, 0.0, 0.0, 0.0]],
+                           duration_s=duration_s + 1)
+    return RunConfig(name=f"still_{distance:g}m_{angle_deg:g}deg", duration_s=duration_s, fps=fps,
+                     shooter_base_xy=list(PFTEST_SHOOTER), initial_aim=robot, turret=TurretConfig(mode="hold"),
+                     targets=[TargetConfig(spec, motion)])
+
+
 SCENARIOS = {
     "static_plate": static_plate,
     "spinning": spinning,
@@ -325,6 +341,7 @@ SCENARIOS = {
     "rec_drive": rec_drive,
     "rec_drive_b": lambda: rec_drive("drive_oval_b"),
     "rec_drive_166": lambda: rec_drive(fps=1e6 / 6000),
+    **{f"still_{d:g}m_{a:g}deg": (lambda d=d, a=a: still(d, a)) for d in (2.0, 3.5, 5.0) for a in (0, 25, 40)},
     **{f"pftest_{robot}_{geometry}": (lambda robot=robot, geometry=geometry: pftest(robot, geometry))
        for robot in PFTEST_ROBOTS for geometry in PFTEST_GEOMETRIES},
 }
