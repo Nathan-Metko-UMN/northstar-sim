@@ -6,7 +6,7 @@ import math
 
 from nssim.mcb.turret import TurretConfig
 from nssim.runner import RunConfig, TargetConfig
-from nssim.sim.targets import Motion, TargetSpec
+from nssim.sim.targets import Motion, ProfileMotion, TargetSpec
 
 
 def static_plate(distance: float = 2.5) -> RunConfig:
@@ -180,6 +180,8 @@ REC_ROBOTS = {
     "round3": ("infantry", "3", 0.27, 0.27, 0.0),
     "hero": ("hero", "1", 0.30, 0.36, 0.05),
     "sentry": ("sentry", "guard", 0.28, 0.28, 0.0),
+    "drive_oval": ("infantry", "3", 0.25, 0.40, 0.03),  # nssim drive's infantry
+    "drive_oval_b": ("infantry", "3", 0.36, 0.24, 0.015),
 }
 
 
@@ -213,6 +215,23 @@ def rec_switch(duration_s: float = 26.0) -> RunConfig:
     return _rec("rec_switch", duration_s, targets, script)
 
 
+# Like a driven session: still, slow spin, faster, full spin, stop, spin again, with some driving.
+DRIVE_PROFILE = [
+    [0.0, 0.0, 0.0, 0.0], [3.0, 0.0, 0.0, 0.5], [5.0, 0.0, 0.0, -0.5], [7.0, 0.0, 0.0, 0.0],
+    [9.0, 1.1, 0.0, 0.0], [19.0, 2.25, 0.0, 0.0], [26.0, 4.5, 0.0, 0.0], [38.0, 0.0, 0.0, 0.0],
+    [44.0, 4.5, 0.0, 0.0], [52.0, 4.5, 0.0, 0.5], [54.0, 4.5, 0.0, -0.5], [56.0, 4.5, 0.0, 0.0],
+    [60.0, 1.1, 0.0, 0.0], [66.0, 0.0, 0.0, 0.0],
+]
+
+
+def rec_drive(robot: str = "drive_oval", fps: float = 50.0, duration_s: float = 70.0) -> RunConfig:
+    """A driven session (DRIVE_PROFILE) at nssim drive's frame rate, turret holding still."""
+    spec = _rec_spec(robot)
+    cfg = _rec(f"rec_drive_{robot}", duration_s, [TargetConfig(spec, ProfileMotion(start=[1.5, 0.0], segments=DRIVE_PROFILE, duration_s=duration_s + 1))])
+    cfg.fps = fps
+    return cfg
+
+
 SCENARIOS = {
     "static_plate": static_plate,
     "spinning": spinning,
@@ -232,4 +251,7 @@ SCENARIOS = {
     "rec_strafe_hero": lambda: _rec_spin("hero", -3.0, name="rec_strafe_hero", strafe_amplitude=0.5, strafe_hz=0.4),
     "rec_spinup_oval3": lambda: _rec_spin("oval3", 6.0, duration_s=14.0, name="rec_spinup_oval3", spin_start_s=4.0),
     "rec_switch": rec_switch,
+    "rec_drive": rec_drive,
+    "rec_drive_b": lambda: rec_drive("drive_oval_b"),
+    "rec_drive_166": lambda: rec_drive(fps=1e6 / 6000),
 }

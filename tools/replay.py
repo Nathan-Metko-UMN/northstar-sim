@@ -236,6 +236,22 @@ def summarize(run: Path) -> dict:
         "geom_sd_mm": float(np.mean([np.std(s[k][late]) for k in ("radius_high", "radius_low", "z_offset")]) * 1000),
         **jerk_metrics(s),
     })
+    # Driven sessions (ProfileMotion): radius, center and aim error in each phase, from 1 s into it.
+    targets = json.loads((RECS / run.name.split("--")[0] / "config.json").read_text())["targets"]
+    segments = (targets[0].get("motion") or {}).get("segments") if targets else None
+    if segments:
+        names = {4: "slow", 5: "mid", 6: "fast", 7: "stop", 8: "fast2", 12: "slow2", 13: "stop2"}
+        ends = [seg[0] for seg in segments[1:]] + [t[-1]]
+        for i, (seg, end) in enumerate(zip(segments, ends)):
+            if i not in names:
+                continue
+            w = (t >= seg[0] + 1.0) & (t < end)
+            if not w.any():
+                continue
+            r_err = (np.abs(s["radius_high_m"][w]) + np.abs(s["radius_low_m"][w])) / 2
+            out[f"{names[i]}_r_cm"] = float(np.mean(r_err) * 100)
+            out[f"{names[i]}_c_cm"] = float(np.mean(s["center_xy_m"][w]) * 100)
+            out[f"{names[i]}_aim_cm"] = float(np.nanmean(s["aim_plate_m"][w]) * 100)
     # Switching recordings: each look at a robot, first visit or a return.
     cfg = json.loads((RECS / run.name.split("--")[0] / "config.json").read_text())
     script = cfg.get("aim_script") or []
@@ -279,7 +295,8 @@ COLUMNS = [
     ("acquire_first_s", "acquire 1st visit s", "{:.2f}"), ("acquire_again_s", "acquire revisit s", "{:.2f}"),
     ("early_r_err_first_cm", "radius err 1st 1.5 s, 1st visit cm", "{:.1f}"),
     ("early_r_err_again_cm", "… revisit cm", "{:.1f}"),
-]
+] + [(f"{phase}_{k}_cm", f"{phase} {label}", "{:.1f}") for phase in ("slow", "mid", "fast", "stop", "fast2", "slow2", "stop2")
+     for k, label in (("r", "r err"), ("c", "center err"), ("aim", "aim err"))]
 
 
 def _family(rec_name: str) -> str:

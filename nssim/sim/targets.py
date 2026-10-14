@@ -121,6 +121,55 @@ class Motion:
         return math.copysign(min(abs(self.omega), self.spin_accel * ts), self.omega)
 
 
+@dataclass
+class ProfileMotion:
+    """Scripted motion in segments, like a driver would: from each segment's start time the robot
+    heads for that spin rate (ramping at spin_accel) and xy velocity (first-order lag), as
+    DrivenMotion does live. segments: [[t_start_s, omega, vx, vy], ...]."""
+
+    start: list[float] = field(default_factory=lambda: [0.0, 0.0])
+    spin0: float = 0.0
+    segments: list[list[float]] = field(default_factory=lambda: [[0.0, 0.0, 0.0, 0.0]])
+    duration_s: float = 60.0
+    spin_accel: float = 12.0
+    velocity_tau_s: float = 0.25
+
+    def __post_init__(self):
+        dt = 0.001
+        n = int(self.duration_s / dt) + 2
+        self._t = np.arange(n) * dt
+        omega = np.zeros(n)
+        xy = np.zeros((n, 2))
+        v = np.zeros((n, 2))
+        angle = np.zeros(n)
+        xy[0] = self.start
+        angle[0] = self.spin0
+        starts = [seg[0] for seg in self.segments]
+        for i in range(1, n):
+            seg = self.segments[max(0, np.searchsorted(starts, self._t[i], side="right") - 1)]
+            w_cmd, v_cmd = seg[1], np.asarray(seg[2:4], float)
+            omega[i] = omega[i - 1] + np.clip(w_cmd - omega[i - 1], -self.spin_accel * dt, self.spin_accel * dt)
+            v[i] = v[i - 1] + (v_cmd - v[i - 1]) * (1.0 - math.exp(-dt / self.velocity_tau_s))
+            xy[i] = xy[i - 1] + v[i] * dt
+            angle[i] = angle[i - 1] + omega[i] * dt
+        self._omega, self._xy, self._v, self._angle = omega, xy, v, angle
+
+    def _i(self, t: float) -> int:
+        return int(min(max(round(t / 0.001), 0), len(self._t) - 1))
+
+    def center_xy(self, t: float) -> np.ndarray:
+        return self._xy[self._i(t)].copy()
+
+    def velocity_xy(self, t: float) -> np.ndarray:
+        return self._v[self._i(t)].copy()
+
+    def spin(self, t: float) -> float:
+        return float(self._angle[self._i(t)])
+
+    def omega_at(self, t: float) -> float:
+        return float(self._omega[self._i(t)])
+
+
 class DrivenMotion:
     """Motion steered live (``nssim drive``), with the same interface as :class:`Motion`.
 
