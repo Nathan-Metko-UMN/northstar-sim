@@ -93,7 +93,7 @@ def series(run_dir: Path) -> dict[str, np.ndarray]:
                 tracks[m["seq"]] = m
     keys = ["z_offset", "true_z_offset", "z_offset_m", "radius_high", "radius_low", "true_radius_high",
             "true_radius_low", "radius_high_m", "radius_low_m", "radius_mean_m", "orientation_rad", "labeling_ok",
-            "plates_m", "facing_plates_m", "center_xy_m", "omega", "true_omega"]
+            "plates_m", "facing_plates_m", "aim_plate_m", "center_xy_m", "omega", "true_omega"]
     rows = {k: [] for k in ["t", *keys]}
     for frame in frames:
         f = frame_errors(frame, None, tracks.get(frame["seq"]))["filter"]
@@ -133,8 +133,9 @@ def summarize(run_dir: Path) -> dict:
         "labeling_ok": float(np.mean(s["labeling_ok"])),
         "plates_cm": float(np.mean(s["plates_m"]) * 100),
         "plates_p95_cm": float(np.percentile(s["plates_m"], 95) * 100),
-        "facing_cm": float(np.nanmean(s["facing_plates_m"]) * 100),
-        "final_facing_cm": float(np.nanmean(s["facing_plates_m"][final]) * 100),
+        "aim_cm": float(np.nanmean(s["aim_plate_m"]) * 100),
+        "aim_p95_cm": float(np.nanpercentile(s["aim_plate_m"], 95) * 100),
+        "final_z_std_mm": float(np.std(s["z_offset"][final]) * 1000),
         "final_center_cm": float(np.mean(s["center_xy_m"][final]) * 100),
         "dz_settle_s": _settle_time(t, np.abs(s["z_offset_m"]) < DZ_SETTLED_M),
         "labeling_settle_s": _settle_time(t, s["labeling_ok"] > 0.5),
@@ -156,11 +157,18 @@ def summarize(run_dir: Path) -> dict:
             out["at_spin_start_z_err_mm"] = float(s["z_offset_m"][i] * 1000)
             out["still_labeling_ok"] = float(np.mean(s["labeling_ok"][before]))
             out["still_plates_cm"] = float(np.mean(s["plates_m"][before]) * 100)
-            out["still_facing_cm"] = float(np.nanmean(s["facing_plates_m"][before]) * 100)
+            out["still_aim_cm"] = float(np.nanmean(s["aim_plate_m"][before]) * 100)
             settled = t >= start + 2.0
             out["after_spin_2s_plates_cm"] = float(np.mean(s["plates_m"][settled]) * 100) if settled.any() else math.nan
-            spin_ok = np.abs(s["omega"] - s["true_omega"]) < 0.5
-            out["spin_found_s"] = _settle_time(t[t >= start], spin_ok[t >= start]) - start
+            # First time from which the spin estimate stays within 1 rad/s for a whole second.
+            ts, err = t[t >= start], np.abs(s["omega"] - s["true_omega"])[t >= start]
+            found = math.inf
+            for i in range(len(ts)):
+                window = (ts >= ts[i]) & (ts < ts[i] + 1.0)
+                if ts[-1] >= ts[i] + 1.0 and np.all(err[window] < 1.0):
+                    found = float(ts[i] - start)
+                    break
+            out["spin_found_s"] = found
     return out
 
 
@@ -209,9 +217,11 @@ COLUMNS = [
     ("labeling_flips", "flips", lambda v: f"{v:.0f}"),
     ("plates_cm", "plate err cm", lambda v: f"{v:.1f}"),
     ("final_plates_cm", "… last 3 s", lambda v: f"{v:.1f}"),
-    ("facing_cm", "facing plate err cm", lambda v: f"{v:.1f}"),
+    ("aim_cm", "aim plate err cm", lambda v: f"{v:.1f}"),
+    ("aim_p95_cm", "… p95", lambda v: f"{v:.1f}"),
     ("final_center_cm", "center err cm (last 3 s)", lambda v: f"{v:.1f}"),
     ("final_z_err_mm", "dz err mm", lambda v: f"{v:+.1f}"),
+    ("final_z_std_mm", "dz jitter mm (last 3 s)", lambda v: f"{v:.1f}"),
     ("dz_settle_s", "dz settle s", lambda v: "never" if not math.isfinite(v) else f"{v:.1f}"),
     ("final_r_high_err_cm", "r high err cm", lambda v: f"{v:+.1f}"),
     ("final_r_low_err_cm", "r low err cm", lambda v: f"{v:+.1f}"),

@@ -109,10 +109,18 @@ def frame_errors(frame: dict, det: dict | None, track: dict | None) -> dict:
         true_plates = [np.asarray(p["center_base"]) for p in target["plates"]]
         plates_m = (float(np.mean([np.min(np.linalg.norm(predicted - tp, axis=1)) for tp in true_plates]))
                     if len(predicted) else math.nan)
-        # The same for the plates facing the camera only: the ones there is something to aim at.
+        # The same for the plates facing the camera only, and for the one facing it most squarely
+        # (the one to aim at).
         facing = [np.asarray(p["center_base"]) for p in target["plates"] if p["facing"]]
         facing_m = (float(np.mean([np.min(np.linalg.norm(predicted - fp, axis=1)) for fp in facing]))
                     if len(predicted) and facing else math.nan)
+
+        def squareness(plate):
+            to_cam = cam_p - np.asarray(plate["center_base"])
+            return float(np.dot(plate["normal"], to_cam) / np.linalg.norm(to_cam))
+
+        square = np.asarray(max(target["plates"], key=squareness)["center_base"])
+        aim_plate_m = float(np.min(np.linalg.norm(predicted - square, axis=1))) if len(predicted) else math.nan
         out["filter"] = {
             "target": target["name"],
             "center_xy_m": float(np.linalg.norm(center[:2] - true_center[:2])),
@@ -127,6 +135,7 @@ def frame_errors(frame: dict, det: dict | None, track: dict | None) -> dict:
             "labeling_ok": float(abs(orientation_err) < math.pi / 4),
             "plates_m": plates_m,
             "facing_plates_m": facing_m,
+            "aim_plate_m": aim_plate_m,
             # What the errors are relative to, for plotting estimate against truth.
             "omega": float(state["omega"]),
             "true_omega": float(target["omega"]),
