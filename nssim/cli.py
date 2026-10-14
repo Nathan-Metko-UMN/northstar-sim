@@ -208,13 +208,56 @@ def _launcher(args, cv_dir: Path):
 
 
 def _cv_env(args) -> dict[str, str]:
-    env = {}
+    from nssim.pf_presets import PRESETS
+
+    env = dict(PRESETS[getattr(args, "preset", None) or "current"])
     for item in getattr(args, "cv_env", None) or []:
         name, sep, value = item.partition("=")
         if not sep or not name:
             sys.exit(f"--cv-env wants NAME=VALUE, got {item!r}")
         env[name] = value
     return env
+
+
+def cmd_pftest(args) -> None:
+    """Every robot type with every plate layout drives the tour; then graphs and a report."""
+    from nssim.pftest import report
+    from nssim.scenarios import PFTEST_GEOMETRIES, PFTEST_ROBOTS, pftest
+
+    robots = args.robots.split(",") if args.robots else list(PFTEST_ROBOTS)
+    layouts = args.layouts.split(",") if args.layouts else list(PFTEST_GEOMETRIES)
+    for name in robots:
+        if name not in PFTEST_ROBOTS:
+            sys.exit(f"unknown robot {name!r}; choose from {', '.join(PFTEST_ROBOTS)}")
+    for name in layouts:
+        if name not in PFTEST_GEOMETRIES:
+            sys.exit(f"unknown layout {name!r}; choose from {', '.join(PFTEST_GEOMETRIES)}")
+    label = args.label or args.preset or "current"
+    root = Path(args.out) if args.out else REPO_ROOT / "runs" / "pftest" / f"{dt.datetime.now():%Y%m%d_%H%M%S}_{label}"
+    root.mkdir(parents=True, exist_ok=True)
+    (root / "pftest.json").write_text(json.dumps({"label": label, "preset": args.preset, "cv_env": _cv_env(args),
+                                                  "robots": robots, "layouts": layouts, "fps": args.fps,
+                                                  "others": not args.alone, "follow": args.follow}, indent=2))
+    for robot in robots:
+        for layout in layouts:
+            run_dir = root / f"pftest_{robot}_{layout}"
+            if (run_dir / "summary.json").is_file():
+                print(f"[nssim] have {run_dir.name}", flush=True)
+                continue
+            cfg = pftest(robot, layout, others=not args.alone, follow=args.follow, fps=args.fps)
+            print(f"[nssim] pftest {robot} / {layout}", flush=True)
+            args.out = str(run_dir)
+            _execute(cfg, args, live="view" if args.view else None)
+    path = report([root])
+    print(f"[nssim] report: {path}")
+
+
+def cmd_pftest_report(args) -> None:
+    from nssim.pftest import report
+
+    roots = [Path(p) for p in args.tests]
+    out = Path(args.out) if args.out else (roots[0] if len(roots) == 1 else REPO_ROOT / "runs" / "pftest" / "compare")
+    print(f"[nssim] report: {report(roots, out)}")
 
 
 def cmd_eval(args) -> None:
@@ -301,6 +344,9 @@ def main(argv=None) -> None:
     loop.add_argument("--image", help="Docker image (default: the --jetpack toolchain's)")
     loop.add_argument("--build-dir", help="build directory in --cv-dir (default: the --jetpack toolchain's)")
     loop.add_argument("--no-compress", action="store_true", help="send raw Bayer frames (fast wired links)")
+    loop.add_argument("--preset", choices=["current", "final"],
+                      help="a named set of tracker switches for Northstar-CV in Docker here (see nssim/pf_presets.py); "
+                      "--cv-env adds to it")
     loop.add_argument("--cv-env", action="append", metavar="NAME=VALUE",
                       help="environment variable for Northstar-CV in Docker here, e.g. PF_RELABEL_AT_ZERO=1 (repeatable)")
     _add_enemy_options(loop)
@@ -329,6 +375,24 @@ def main(argv=None) -> None:
     dr.add_argument("--turret", choices=["hold", "ideal", "second_order"])
     dr.add_argument("--no-cv-window", action="store_true", help="skip the window with the CV's camera image")
     dr.set_defaults(func=cmd_drive)
+
+    pt = sub.add_parser("pftest", parents=[common], help="tracker test: each robot type and plate layout drives a tour "
+                        "while changing its spin; writes graphs and a report")
+    pt.add_argument("--robots", help="comma-separated: infantry,hero,sentry (default all)")
+    pt.add_argument("--layouts", help="comma-separated: oval_offset,round_offset,oval_flat,round_flat (default all)")
+    pt.add_argument("--fps", type=float, default=1e6 / 6000, help="camera frame rate (default 166; 50 is ~3x faster)")
+    pt.add_argument("--alone", action="store_true", help="only the robot under test (default: the other two drive beside it)")
+    pt.add_argument("--follow", choices=["truth", "cv"], default="truth",
+                    help="the turret follows the robot under test (truth, default) or the CV's aim")
+    pt.add_argument("--view", action="store_true", help="watch each run in the 3D viewer (paced to real time)")
+    pt.add_argument("--no-cv-window", action="store_true", help="with --view: skip the camera window")
+    pt.add_argument("--label", help="name for this test in reports (default: the preset)")
+    pt.set_defaults(func=cmd_pftest)
+
+    ptr = sub.add_parser("pftest-report", help="graphs and report for pftest runs; with several, a comparison")
+    ptr.add_argument("tests", nargs="+", help="pftest folders (runs/pftest/...)")
+    ptr.add_argument("--out", help="where the comparison goes (default runs/pftest/compare)")
+    ptr.set_defaults(func=cmd_pftest_report)
 
     db = sub.add_parser("dashboard", help="look through a recorded run in the dashboard")
     db.add_argument("run_dir")

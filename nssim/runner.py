@@ -87,6 +87,26 @@ class RunConfig:
     ack_timeout_s: float = 30.0
 
 
+
+def _segment_hits_box(a: np.ndarray, b: np.ndarray, lo: np.ndarray, hi: np.ndarray) -> bool:
+    """Does the segment a->b pass through the axis-aligned box [lo, hi]? (slab test; the last 2 cm
+    before b don't count, so a plate's own mounting can't hide it)"""
+    d = b - a
+    length = float(np.linalg.norm(d))
+    if length < 1e-6:
+        return False
+    t0, t1 = 0.0, 1.0 - 0.02 / length
+    for k in range(3):
+        if abs(d[k]) < 1e-9:
+            if a[k] < lo[k] or a[k] > hi[k]:
+                return False
+            continue
+        ta, tb = (lo[k] - a[k]) / d[k], (hi[k] - a[k]) / d[k]
+        t0, t1 = max(t0, min(ta, tb)), min(t1, max(ta, tb))
+        if t0 > t1:
+            return False
+    return True
+
 @dataclass
 class _PendingFrame:
     seq: int
@@ -334,8 +354,12 @@ class Runner:
         return gt, cam_pose, states
 
     def _occluded(self, eye: np.ndarray, point: np.ndarray, owner: str, states: dict) -> bool:
-        """Does another robot stand in the line of sight to a plate? (Robots as vertical cylinders
-        the size of their plate ring; everything is at about the same height.)"""
+        """Does another robot, or a field element, stand in the line of sight to a plate? (Robots as
+        vertical cylinders the size of their plate ring; field elements as their bounding boxes, which
+        is exact for the boxes, barriers and walls and generous for the ramps.)"""
+        for lo, hi in getattr(self.scene, "obstacles", []):
+            if _segment_hits_box(eye, point, lo, hi):
+                return True
         sight = point[:2] - eye[:2]
         length = float(np.linalg.norm(sight))
         if length < 1e-6:

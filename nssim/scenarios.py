@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import math
 
+import numpy as np
+
 from nssim.mcb.turret import TurretConfig
 from nssim.runner import RunConfig, TargetConfig
 from nssim.sim.targets import Motion, ProfileMotion, TargetSpec
@@ -232,6 +234,75 @@ def rec_drive(robot: str = "drive_oval", fps: float = 50.0, duration_s: float = 
     return cfg
 
 
+# --- Tracker test (nssim pftest): a robot driving around while it changes how it spins ---
+
+# Where we stand for the tracker test, and the clear line of sight across the field from there
+# (between the side box, the barriers and the ramps): the robot under test drives along it.
+PFTEST_SHOOTER = (-2.5, -0.8)
+_ALONG = np.array([4.4, 3.8]) / np.hypot(4.4, 3.8)
+_ACROSS = np.array([-_ALONG[1], _ALONG[0]])
+
+# [t_start s, spin rad/s, speed away from us m/s, speed across m/s]: fast, slow, the other way and
+# stopped, while driving out to ~5.5 m, across, and back in to ~2 m. Starts 3 m away.
+TOUR_LOCAL = [
+    [0.0, 6.0, 0.0, 0.0], [4.0, 6.0, 0.5, 0.0], [7.0, 1.5, 0.4, 0.0], [9.0, 1.5, 0.0, 0.3],
+    [11.0, -4.0, 0.0, -0.3], [14.0, -4.0, -0.8, 0.0], [17.0, 0.0, -0.4, 0.0], [19.0, 0.0, 0.0, 0.0],
+    [21.0, 3.0, 0.0, 0.3], [24.0, 6.0, 0.0, -0.3], [27.0, -6.0, 0.5, 0.15], [31.0, -1.5, 0.4, 0.1],
+    [34.0, 4.5, -0.6, -0.2], [38.0, 0.0, -0.3, 0.1], [40.0, 6.0, 0.0, 0.0], [43.0, 0.0, 0.0, 0.0],
+]
+TOUR = [[t, w, *(along * _ALONG + across * _ACROSS)] for t, w, along, across in TOUR_LOCAL]
+TOUR_START = (np.asarray(PFTEST_SHOOTER) + 3.0 * _ALONG).tolist()
+TOUR_S = 45.0
+
+# Plate layouts every robot type is tested with: (radius of plates 0/2 (the high pair), of 1/3,
+# height offset). Hero plates sit a little further out.
+PFTEST_GEOMETRIES = {
+    "oval_offset": (0.24, 0.34, 0.03),
+    "round_offset": (0.29, 0.29, 0.03),
+    "oval_flat": (0.24, 0.34, 0.0),
+    "round_flat": (0.29, 0.29, 0.0),
+}
+PFTEST_ROBOTS = {"infantry": ("infantry", "3", 0.0), "hero": ("hero", "1", 0.04), "sentry": ("sentry", "guard", 0.0)}
+
+
+def _scaled_tour(scale: float, shift_s: float) -> list[list[float]]:
+    """The tour with smaller moves, started shift_s later (for the robots we're not tracking)."""
+    tour = [[t, w, vx * scale, vy * scale] for t, w, vx, vy in TOUR]
+    shifted = [[(t + shift_s) % TOUR_S, w, vx, vy] for t, w, vx, vy in tour]
+    return sorted(shifted)
+
+
+def pftest(robot: str = "infantry", geometry: str = "oval_offset", others: bool = True, follow: str = "truth",
+           fps: float = 1e6 / 6000) -> RunConfig:
+    """The tracker test: `robot` with `geometry` drives TOUR; with `others`, the two other robot
+    types drive smaller loops beside it (their own default layouts). The turret follows the robot
+    under test (follow="truth": what the camera sees doesn't depend on the tracker) or the CV's aim
+    (follow="cv")."""
+    panel, number, extra = PFTEST_ROBOTS[robot]
+    r_high, r_low, dz = PFTEST_GEOMETRIES[geometry]
+    spec = TargetSpec(name=robot, panel=panel, number=number, radius_high=r_high + extra, radius_low=r_low + extra, z_offset=dz)
+    targets = [TargetConfig(spec, ProfileMotion(start=TOUR_START, segments=TOUR, duration_s=TOUR_S + 1))]
+    if others:
+        spots = [[0.9, -1.4], [1.2, 0.3]]
+        for i, other in enumerate(k for k in PFTEST_ROBOTS if k != robot):
+            o_panel, o_number, o_extra = PFTEST_ROBOTS[other]
+            o_spec = TargetSpec(name=other, panel=o_panel, number=o_number, radius_high=0.26 + o_extra,
+                                radius_low=0.30 + o_extra, z_offset=0.02)
+            targets.append(TargetConfig(o_spec, ProfileMotion(start=spots[i], segments=_scaled_tour(0.2, 11.0 * (i + 1)),
+                                                              duration_s=TOUR_S + 1)))
+    cfg = RunConfig(
+        name=f"pftest_{robot}_{geometry}",
+        duration_s=TOUR_S,
+        fps=fps,
+        shooter_base_xy=list(PFTEST_SHOOTER),
+        initial_aim=robot,
+        turret=TurretConfig(mode="second_order"),
+        targets=targets,
+        aim_script=[(0.0, robot)] if follow == "truth" else [],
+    )
+    return cfg
+
+
 SCENARIOS = {
     "static_plate": static_plate,
     "spinning": spinning,
@@ -254,4 +325,6 @@ SCENARIOS = {
     "rec_drive": rec_drive,
     "rec_drive_b": lambda: rec_drive("drive_oval_b"),
     "rec_drive_166": lambda: rec_drive(fps=1e6 / 6000),
+    **{f"pftest_{robot}_{geometry}": (lambda robot=robot, geometry=geometry: pftest(robot, geometry))
+       for robot in PFTEST_ROBOTS for geometry in PFTEST_GEOMETRIES},
 }

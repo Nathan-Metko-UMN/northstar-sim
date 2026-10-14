@@ -216,14 +216,17 @@ class ArenaScene:
         self.scene.add_directional_light(list(self.appearance.sun_direction), [s, s, s], shadow=False)
 
     def _load_field(self) -> None:
+        self.obstacles: list[tuple[np.ndarray, np.ndarray]] = []  # field elements' boxes (min, max), for occlusion
         for name in [FIELD_FLOOR, *FIELD_ELEMENTS]:
             builder = self.scene.create_actor_builder()
             builder.add_visual_from_file(str(self.assets.field_file(name)))
             entity = builder.build_kinematic(name=name)
+            body = entity.find_component_by_type(sapien.render.RenderBodyComponent)
+            aabb = body.compute_global_aabb_tight()
             if name == FIELD_FLOOR:
-                body = entity.find_component_by_type(sapien.render.RenderBodyComponent)
-                aabb = body.compute_global_aabb_tight()
                 self.floor_bounds = (aabb[0, :2].astype(float), aabb[1, :2].astype(float))  # xy min, max
+            else:
+                self.obstacles.append((aabb[0].astype(float), aabb[1].astype(float)))
 
     def add_target(self, spec: TargetSpec) -> None:
         self.targets[spec.name] = _TargetVisual(self.scene, self.assets, spec, self.appearance)
