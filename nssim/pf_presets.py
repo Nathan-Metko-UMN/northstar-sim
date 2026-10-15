@@ -56,11 +56,14 @@ PRESETS["next2"] = {
 # "next2" with light bar ends found to a fraction of a pixel (their own end correction), and the
 # aim staying on the plate facing us best instead of the nearest (no flipping between two equal ones),
 # and calm particles given little spin-rate noise and fewer particles maneuvering at a time (a
-# still robot's spin estimate, and the aim's lead with it, doesn't wobble).
+# still robot's spin estimate, and the aim's lead with it, doesn't wobble). A filter started from
+# memory can still correct it, and only its own settling writes memory back.
 PRESETS["next3"] = {
     **PRESETS["next2"],
     "PF_SPIN_CALM_VARIANCE": "0.01",
     "PF_MANEUVER_SWITCH_RATE": "0.2",
+    "PF_MEMORY_FRESH": "1",
+    "PF_LOCK_FLOOR": "0.3",
     "LIGHT_ENDS_SUBPIXEL": "1",
     "LIGHT_END_SHRINK_PX": "0.67",
     "LIGHT_END_SHRINK_K": "19.8",

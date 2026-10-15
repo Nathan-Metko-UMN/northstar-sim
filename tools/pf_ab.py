@@ -92,6 +92,8 @@ VARIANTS = {
     "spincalm0003": {"PF_SPIN_CALM_VARIANCE": "0.003"},
     "yawloose4": {"PF_YAW_VARIANCE": "0.0049"},
     "fewman02": {"PF_MANEUVER_SWITCH_RATE": "0.2"},
+    "memfresh": {"PF_MEMORY_FRESH": "1"},
+    "lockfloor03": {"PF_LOCK_FLOOR": "0.3"},
     "mode5": {"PF_CENTER_XY_VELOCITY_PROCESS_VARIANCE": "0.1", "PF_MANEUVER_VELOCITY_VARIANCE": "5", "PF_MANEUVER_SWITCH_RATE": "1"},
     "assoc": {"PF_ASSOC_BEST": "1"},
     "visflat": {"PF_VISIBILITY_LOGIT_COEFFICIENT": "10", "PF_VISIBILITY_THRESHOLD": "0.3"},
