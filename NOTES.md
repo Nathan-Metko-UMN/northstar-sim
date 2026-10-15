@@ -47,15 +47,72 @@ Worth training the next classifier (or the TensorRT detector) with scale and shi
 bars come out of `findLights` 0.4 px (head-on) to 0.8 px (45–60°) longer than they are: their ends
 are the bounding box of the thresholded blob, which includes the glow past the bar ends. Bar spacing
 is right, so PnP puts the plate 1–2% too close, and the filter's center follows (the center sat
-4–7 cm toward the camera). Pulling each detected end in by 0.25 px (`LIGHT_END_SHRINK_PX`, a test
-switch on `claude/pf-height-tests`) takes the head-on error to 0.0 cm and 45–60° to −1…−2 cm, with
-recall unchanged. The real camera's glow differs: set it there against a tape-measured plate.
+4–7 cm toward the camera). Small far bars go the other way (dim ends fall under the threshold:
+−0.17 px per end at 20 px long), so the correction depends on bar length:
+`LIGHT_END_SHRINK_PX − LIGHT_END_SHRINK_K / length` (0.68 px, 17.2 px; with sub-pixel ends,
+`LIGHT_ENDS_SUBPIXEL`, 0.67 and 19.8). That keeps range within ±2 cm from 2 to 5.5 m. The real
+camera's glow differs: set it there against tape-measured plates at a few distances. Whole-pixel
+bar ends also make range jump as a plate's image creeps (11–130 mm on a still robot watched by a
+moving turret); sub-pixel ends take most of that out.
 
 **The filter ignored the plate yaw PnP measures.** With positions alone, a robot that stops at an
 angle drifted toward "plate faces the camera" (~25°, the center 11 cm off). PnP's yaw (outward
 normal = −x of its armor frame) has a median error within ±2° but 6–21° spread and 3–5% outliers
 beyond 30°; scored with σ = 15° and an outlier floor (`PF_YAW_VARIANCE`, `PF_YAW_INIT`) it takes
 the stopped center error from 11 cm to 1 cm and halves the center kick at plate switches.
+
+**Full PnP on a far plate trades rotation against range.** A small plate seen nearly head-on is
+PnP's weak case: in the sim its yaw spread is 5° at 2 m and 52° at 5 m (28% beyond 30°). The
+plate's 15° tilt and zero roll are known, so solving for yaw and position only
+(`PnPSolver::solveFixedTilt`, `PNP_FIXED_TILT`) takes that to 0.4° and 14°, and range spread down a
+little. Check the tilt on the real robot.
+
+**The number classifier misses plates turned past ~50°**, the hero's and sentry's most (58–66% of
+their candidates read "negative" at 50–70°; light-bar pairing still finds 97% of them). A confident
+"1" was also thrown away when the bar spacing said "small plate" (a large plate turned past ~35°);
+the number fixes the size instead (`ARMOR_TYPE_FROM_NUMBER`). Tracking-assisted detection
+(`DETECT_ASSIST`) takes a rejected pair where the tracker expects one of the tracked robot's plates
+(12 cm, facing the same way within 30°): hero and sentry recall 68–80% → 95–98%, no misreads.
+
+**Up close, plates leave the image.** Within 1.2 m most missed plates are below or beside the
+frame (the robot is wider and lower than the camera sees), not missed by the detector; the tracker
+coasts on its prediction (1 s) and per-robot memory restores the geometry.
+
+## Tracker (particle filter) findings
+
+From `nssim pftest` (every robot type and plate layout driving a tour; replays in
+`tools/replay.py` and `tools/bench.py`), on `claude/pf-height-tests`. The switches are environment
+variables read by `src/sim/pf_overrides.hpp`; `nssim/pf_presets.py` collects them (`--preset`).
+
+- **3D visibility was spurious evidence.** The observer is our base, ~0.2 m below the enemy's
+  center, so tilting plates up or down changed how "visible" they scored: on a still robot the
+  filter picked the wrong high pair 100% of the time and shrank a radius to the 10 cm clamp. Score
+  visibility in xy (`PF_VISIBILITY_XY`).
+- **The particle average blended the two high/low labelings 90° apart.** Average with the ±90°
+  relabelings too (`PF_SWAP_REDUCTION`), and let a particle change which pair it calls high by
+  relabeling at dz = 0 rather than reflecting (`PF_RELABEL_AT_ZERO`).
+- **A lone plate was always matched to the predicted plate nearest the camera**, which near a
+  plate switch is often the wrong one (`PF_ASSOC_BEST`).
+- **Strafing was lost** with center-velocity noise 0.3; one fixed value can't serve both a dodging
+  and a still robot. Each particle is calm (0.1) or maneuvering (3), switching at 0.2/s.
+- **Radius**: noise only in proportion to spin, a pull toward the prior only before the robot has
+  turned, settling by radians turned (`PF_RADIUS_MODE=4`, `PF_SETTLE_BY_ANGLE`); the old spin-gated
+  pull dragged learned radii back whenever the robot slowed.
+- **Measurement trust by distance**: position as distance² (`PF_POSITION_REF_DISTANCE`), yaw as
+  distance² from 2° at 3 m with the fixed-tilt PnP, an outlier floor on position.
+- **Still-robot turret shake** came from the spin estimate wobbling ±0.05 rad/s, which the aim
+  multiplies by its lead (~120 ms). Calm particles' spin noise 0.003, maneuvering 12, yaw trusted
+  4x less when turning under 0.5 rad/s, and small dead-bands on the aim's lead (0.05 rad/s, 2 cm/s)
+  take the turret to 0.001° spread (Northstar-CV as built: 0.013°, its estimate barely moves
+  because it has no yaw).
+- **Plate numbers aren't stable through extrapolation** (orientation wraps every 180°, swapping
+  0↔2): anything that follows "plate i" into the future has to follow it by angle.
+- **Per-robot memory** must not inherit settledness: a filter restarted from memory that counted as
+  settled wrote its own (bad, close-range) state back, and the height offset stuck at 0
+  (`PF_MEMORY_FRESH`).
+
+Tracker test, 12 runs (50 fps, no sensor noise): Northstar-CV as built 595 spikes (aimed plate
+>10 cm off), 5.0 cm aim error; `--preset next5a` 1 spike, 1.1 cm.
 
 ## Appearance calibration (`nssim/sim/scene.py`, `nssim/camera/optics.py`)
 
