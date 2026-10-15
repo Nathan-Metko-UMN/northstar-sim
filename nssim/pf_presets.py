@@ -1,7 +1,8 @@
 """Named sets of Northstar-CV tracker switches (its PF_* environment variables), for --preset.
 
-"current" is Northstar-CV as built; "final" is the tracker settled on in the simulator tests (see
-NOTES.md): xy visibility, 5-way averaging, relabeling at 0, best-fit plate matching, calm and
+"current" is Northstar-CV as built. "next5a" is the one to use: the latest of the tracker settings
+worked out in the simulator tests (NOTES.md), each preset building on the one before. "final" was
+the first of them: xy visibility, 5-way averaging, relabeling at 0, best-fit plate matching, calm and
 maneuvering velocity modes, spin-proportional radius noise and angle-based settling, per-robot
 memory with center height, PnP plate yaw (trusted less with distance), and the light-bar end
 correction (by bar size).

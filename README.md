@@ -141,7 +141,10 @@ radii and height offset against truth, detections), and the test gets `report.md
 
 By default the turret follows the robot under test, so what the camera sees doesn't depend on the
 tracker (`--follow cv` follows the CV's aim instead). `--preset` (also on `run` and `drive`)
-applies a named set of tracker switches from `nssim/pf_presets.py`; `--cv-env` adds to it.
+applies a named set of tracker switches from `nssim/pf_presets.py` (`next5a` is the latest);
+`--cv-env` adds to it. `--sensor-noise 2,0.15` adds camera read and shot noise (about 4x slower:
+noisy frames compress poorly). For tuning without rendering, `tools/bench.py` replays recorded
+detections through tracker variants and scores them.
 
 ## Live dashboard
 
