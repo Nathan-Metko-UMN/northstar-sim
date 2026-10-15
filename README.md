@@ -134,7 +134,7 @@ radii and height offset against truth, detections), and the test gets `report.md
 
 ```
 .venv\Scripts\nssim pftest                          # Northstar-CV as built, 12 runs at 166 fps
-.venv\Scripts\nssim pftest --preset final --fps 50  # the tracker switches from the sim tests, ~3x faster
+.venv\Scripts\nssim pftest --preset next5a --fps 50 # the tracker switches from the sim tests, ~3x faster
 .venv\Scripts\nssim pftest --robots hero --layouts round_flat --view   # one run, in the 3D viewer
 .venv\Scripts\nssim pftest-report runs\pftest\A runs\pftest\B           # compare two tests
 ```
