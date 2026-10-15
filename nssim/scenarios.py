@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+from dataclasses import replace as _replace
 
 import numpy as np
 
@@ -341,6 +342,8 @@ SCENARIOS = {
     "rec_drive": rec_drive,
     "rec_drive_b": lambda: rec_drive("drive_oval_b"),
     "rec_drive_166": lambda: rec_drive(fps=1e6 / 6000),
+    # nssim drive's start, unattended: the enemies stand still, the turret follows the CV's aim.
+    "drive_start": lambda: _replace(drive(), name="drive_start", duration_s=20.0),
     **{f"still_{d:g}m_{a:g}deg": (lambda d=d, a=a: still(d, a)) for d in (2.0, 3.5, 5.0) for a in (0, 25, 40)},
     **{f"pftest_{robot}_{geometry}": (lambda robot=robot, geometry=geometry: pftest(robot, geometry))
        for robot in PFTEST_ROBOTS for geometry in PFTEST_GEOMETRIES},

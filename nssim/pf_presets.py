@@ -58,7 +58,7 @@ PRESETS["next2"] = {
 # and calm particles given little spin-rate noise (a still robot's aim doesn't jitter with it).
 PRESETS["next3"] = {
     **PRESETS["next2"],
-    "PF_SPIN_CALM_VARIANCE": "0.3",
+    "PF_SPIN_CALM_VARIANCE": "0.01",
     "LIGHT_ENDS_SUBPIXEL": "1",
     "LIGHT_END_SHRINK_PX": "0.67",
     "LIGHT_END_SHRINK_K": "19.8",
