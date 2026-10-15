@@ -37,8 +37,16 @@ BATCH = "bench"
 OUT = REPO / "runs" / "replay" / BATCH
 
 
+SET = "clean"  # or "noise": the same kinds of recordings, made with --sensor-noise 2,0.15
+
+
 def sets() -> dict[str, list[str]]:
     names = sorted(p.name for p in RECS.iterdir() if (p / "replay_recorded.txt").is_file())
+    if SET == "noise":
+        return {
+            "drive": [n for n in names if n.startswith("pftest_") and n.endswith("__noise")],
+            "still": [n for n in names if n.startswith("still_") and n.endswith("__noise_cl")] + ["drive_start_noise__next5a"],
+        }
     return {
         "drive": [n for n in names if n.startswith("pftest_") and n.endswith("__n3")],
         "still": [n for n in names if n.startswith("still_") and n.endswith("__next3_cl")] + ["drive_start__next3b"],
@@ -185,7 +193,7 @@ def metrics(variant: str, seeds: list[str]) -> dict:
 
 
 # Lower is better for all; the score is the mean of each one's ratio to the reference.
-SCORED = ["aim", "aim_p99", "center", "spike_frames", "spin_lag", "still_step", "reacquire", "stuck_dz_err"]
+SCORED = ["aim", "aim_p99", "center", "spike_frames", "spin_lag", "still_step", "still_sd", "reacquire", "stuck_dz_err"]
 COLUMNS = [("aim", "aim cm", 100, "{:.2f}"), ("aim_p99", "aim p99 cm", 100, "{:.1f}"), ("center", "center cm", 100, "{:.2f}"),
            ("spike_frames", "spike %", 100, "{:.2f}"), ("spikes", "spikes", 1, "{:.0f}"), ("spin_lag", "spin lag s", 1, "{:.2f}"),
            ("spin_err", "spin err", 1, "{:.3f}"), ("still_step", "still step mrad", 1, "{:.3f}"),
@@ -198,7 +206,7 @@ def table(variants: list[str], seeds: list[str], ref: str) -> str:
     base = results.get(ref) or metrics(ref, seeds)
     lines = ["| variant | score | " + " | ".join(c[1] for c in COLUMNS) + " |", "|---|---|" + "---|" * len(COLUMNS)]
     for v, m in results.items():
-        score = np.mean([m[k] / base[k] for k in SCORED if base.get(k)])
+        score = np.mean([m[k] / base[k] for k in SCORED if base.get(k) and k in m])
         lines.append(f"| {v} | {score:.3f} | " + " | ".join(f.format(m.get(k, math.nan) * s) for k, _, s, f in COLUMNS) + " |")
     return "\n".join(lines)
 
@@ -209,7 +217,10 @@ def main() -> None:
     parser.add_argument("--seeds", default="0")
     parser.add_argument("--ref", default="next3")
     parser.add_argument("--parallel", type=int, default=6)
+    parser.add_argument("--set", choices=["clean", "noise"], default="clean", help="which recordings")
     args = parser.parse_args()
+    global SET
+    SET = args.set
     seeds = args.seeds.split(",")
     variants = list(dict.fromkeys([args.ref, *args.variants]))
     run(variants, seeds, args.parallel)
