@@ -27,6 +27,10 @@ class Optics:
     glare_sigma_px: float = 2.0
     glare_strength: float = 0.35  # fraction of a light source's (linear) light added as halo; 0 disables
     gamma: float = 2.2  # the renderer writes sRGB-like values; the halo is added in linear light
+    # Sensor noise on the raw Bayer image, in 8-bit levels: read noise (sd) and shot noise (variance
+    # per level of signal). 0 renders a still scene identically every frame, which no camera does.
+    read_noise_dn: float = 0.0
+    shot_noise_gain: float = 0.0
 
 
 def apply_optics(rgb: np.ndarray, optics: Optics) -> np.ndarray:
@@ -40,6 +44,17 @@ def apply_optics(rgb: np.ndarray, optics: Optics) -> np.ndarray:
     if optics.glare_strength > 0:
         _add_glare(out, optics)
     return out
+
+
+def add_sensor_noise(raw: np.ndarray, optics: Optics, seed: int) -> np.ndarray:
+    """Raw (Bayer) uint8 image with read and shot noise added (seeded, so a run is repeatable)."""
+    if optics.read_noise_dn <= 0 and optics.shot_noise_gain <= 0:
+        return raw
+    rng = np.random.default_rng(seed)
+    signal = raw.astype(np.float32)
+    sd = np.sqrt(optics.read_noise_dn ** 2 + optics.shot_noise_gain * signal)
+    noisy = signal + sd * rng.standard_normal(raw.shape, dtype=np.float32)
+    return np.clip(np.rint(noisy), 0, 255).astype(np.uint8)
 
 
 @lru_cache(maxsize=4)

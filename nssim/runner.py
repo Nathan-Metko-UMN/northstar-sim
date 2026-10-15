@@ -24,6 +24,7 @@ from typing import Protocol
 import numpy as np
 
 from nssim.camera import CameraModel, FrameHeader, FrameServer, LinkModel, Optics, apply_optics, mosaic_rggb
+from nssim.camera.optics import add_sensor_noise
 from nssim.camera.stream import pack_frame
 from nssim.mcb import McbConfig, TurretState, VirtualMcb
 from nssim.mcb.link import UartLink
@@ -503,7 +504,7 @@ class Runner:
                     w1 = time.perf_counter()
                     rgb = self.scene.render(cam_pose, states)
                     w2 = time.perf_counter()
-                    bayer = mosaic_rggb(apply_optics(rgb, cfg.optics))
+                    bayer = add_sensor_noise(mosaic_rggb(apply_optics(rgb, cfg.optics)), cfg.optics, seq)
                     w3 = time.perf_counter()
                     capture_us = next_render_us + half_exposure
                     start = max(capture_us, link_free_us)

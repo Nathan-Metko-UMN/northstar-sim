@@ -39,6 +39,10 @@ def _apply_common(cfg, args):
     """run / drive options that change the scenario itself."""
     if getattr(args, "no_compress", False):
         cfg.compress_frames = False
+    if getattr(args, "sensor_noise", None):
+        read, _, shot = args.sensor_noise.partition(",")
+        cfg.optics.read_noise_dn = float(read)
+        cfg.optics.shot_noise_gain = float(shot) if shot else 0.1
     for target in cfg.targets:
         if getattr(args, "plate_height", None) is not None:
             target.spec.z_offset = args.plate_height
@@ -244,7 +248,7 @@ def cmd_pftest(args) -> None:
             if (run_dir / "summary.json").is_file():
                 print(f"[nssim] have {run_dir.name}", flush=True)
                 continue
-            cfg = pftest(robot, layout, others=not args.alone, follow=args.follow, fps=args.fps)
+            cfg = _apply_common(pftest(robot, layout, others=not args.alone, follow=args.follow, fps=args.fps), args)
             print(f"[nssim] pftest {robot} / {layout}", flush=True)
             args.out = str(run_dir)
             _execute(cfg, args, live="view" if args.view else None)
@@ -344,6 +348,9 @@ def main(argv=None) -> None:
     loop.add_argument("--image", help="Docker image (default: the --jetpack toolchain's)")
     loop.add_argument("--build-dir", help="build directory in --cv-dir (default: the --jetpack toolchain's)")
     loop.add_argument("--no-compress", action="store_true", help="send raw Bayer frames (fast wired links)")
+    loop.add_argument("--sensor-noise", metavar="READ[,SHOT]",
+                      help="camera noise in 8-bit levels: read noise sd, and shot noise variance per level "
+                      "(default 0.1), e.g. 2 or 2,0.15; off by default")
     loop.add_argument("--preset", choices=sorted(__import__("nssim.pf_presets", fromlist=["PRESETS"]).PRESETS),
                       help="a named set of tracker switches for Northstar-CV in Docker here (see nssim/pf_presets.py); "
                       "--cv-env adds to it")
