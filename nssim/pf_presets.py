@@ -69,3 +69,24 @@ PRESETS["next3"] = {
     "LIGHT_END_SHRINK_K": "19.8",
     "AIM_SELECT_FACING": "1",
 }
+# "next3" with each plate's yaw trusted less on a slowly turning robot (4x the variance when still,
+# back to normal by 0.5 rad/s), and the aim's lead ignoring spin under 0.05 rad/s and center speed
+# under 2 cm/s (a still robot's estimates wobbling around zero no longer move the aim).
+PRESETS["next4"] = {
+    **PRESETS["next3"],
+    "PF_YAW_SLOW_FACTOR": "4",
+    "PF_YAW_SLOW_SPIN": "0.5",
+    "AIM_SPIN_DEADBAND": "0.05",
+    "AIM_VELOCITY_DEADBAND": "0.02",
+}
+# "next4" tuned on the replay benchmark (tools/bench.py): yaw trust falling as distance^2 (not ^4),
+# maneuvering particles' spin noise 12, calm particles' 0.003.
+PRESETS["next5"] = {
+    **PRESETS["next4"],
+    "PF_YAW_DISTANCE_POWER": "2",
+    "PF_ORIENTATION_VELOCITY_PROCESS_VARIANCE": "12",
+    "PF_SPIN_CALM_VARIANCE": "0.003",
+}
+# "next5" with tracking-assisted detection: a plate the number classifier rejected is taken where
+# the tracker expects one of the tracked robot's plates (Detector::assistDetections).
+PRESETS["next5a"] = {**PRESETS["next5"], "DETECT_ASSIST": "1"}
